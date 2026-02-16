@@ -12,9 +12,9 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - /opt/ai/compose/litellm-config.yml:/app/config.yaml:ro
+      - /opt/ai/compose/litellm-active.yml:/app/config.yaml:ro
 
-  # vLLM FAST (Qwen 7B) — concurrencia 2-3, rápido
+  # vLLM FAST (Qwen 7B AWQ) — concurrencia 4, rápido
   vllm-fast:
     image: vllm/vllm-openai:v0.5.4
     container_name: vllm-fast

@@ -19,8 +19,8 @@ local-init:    ; docker exec ollama ollama pull qwen2.5:7b
 # --- Producción (servidor con GPU) ---
 PROD=cd /opt/ai/compose && docker compose -f docker-compose.yml -f docker-compose.prod.yml
 
-prod-fast:     ; $(PROD) --profile fast up -d
-prod-quality:  ; $(PROD) --profile quality up -d
+prod-fast:     ; ln -sf /opt/ai/compose/litellm-config.fast.yml /opt/ai/compose/litellm-active.yml && $(PROD) --profile fast up -d
+prod-quality:  ; ln -sf /opt/ai/compose/litellm-config.quality.yml /opt/ai/compose/litellm-active.yml && $(PROD) --profile quality up -d
 prod-web:      ; $(PROD) --profile fast --profile webui up -d
 prod-all:      ; $(PROD) --profile fast --profile webui up -d
 prod-down:     ; $(PROD) --profile fast --profile quality --profile webui down

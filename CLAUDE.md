@@ -24,7 +24,8 @@ Open WebUI (port 3000) → LiteLLM
 | `docker-compose.yml` | Base services: LiteLLM + Open WebUI |
 | `docker-compose.local.yml` | Local override: adds Ollama, uses `./data/` for volumes |
 | `docker-compose.prod.yml` | Prod override: adds vLLM services with GPU, uses `/opt/ai/` paths |
-| `litellm-config.yml` | Model routing for prod (vLLM backends) |
+| `litellm-config.fast.yml` | Model routing for prod fast profile |
+| `litellm-config.quality.yml` | Model routing for prod quality profile |
 | `litellm-config.local.yml` | Model routing for local (Ollama backend) |
 | `Makefile` | `local-*` and `prod-*` targets |
 

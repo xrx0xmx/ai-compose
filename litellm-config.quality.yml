@@ -1,0 +1,10 @@
+model_list:
+  - model_name: qwen-quality
+    litellm_params:
+      model: openai/Qwen/Qwen2.5-14B-Instruct-AWQ
+      api_base: http://vllm-quality:8000/v1
+      api_key: EMPTY
+
+general_settings:
+  master_key: "cambiaLAclave"
+  database_url: "os.environ/DATABASE_URL"

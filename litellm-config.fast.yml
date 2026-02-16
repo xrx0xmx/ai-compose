@@ -1,0 +1,10 @@
+model_list:
+  - model_name: qwen-fast
+    litellm_params:
+      model: openai/Qwen/Qwen2.5-7B-Instruct-AWQ
+      api_base: http://vllm-fast:8000/v1
+      api_key: EMPTY
+
+general_settings:
+  master_key: "cambiaLAclave"
+  database_url: "os.environ/DATABASE_URL"
