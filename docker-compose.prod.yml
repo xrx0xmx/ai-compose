@@ -31,7 +31,7 @@ services:
         "--host","0.0.0.0",
         "--port","8000",
         "--dtype","half",
-        "--quantization","awq",
+        "--quantization","awq_marlin",
         "--max-model-len","4096",
         "--gpu-memory-utilization","0.55",
         "--max-num-seqs","4"
@@ -62,7 +62,7 @@ services:
         "--host","0.0.0.0",
         "--port","8000",
         "--dtype","half",
-        "--quantization","awq",
+        "--quantization","awq_marlin",
         "--max-model-len","3072",
         "--gpu-memory-utilization","0.85",
         "--max-num-seqs","1"
