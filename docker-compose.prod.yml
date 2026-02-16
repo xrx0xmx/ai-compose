@@ -3,10 +3,16 @@
 # Uso: docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile fast up -d
 # ============================================================
 services:
+  postgres:
+    volumes:
+      - /opt/ai/postgres:/var/lib/postgresql/data
+
   litellm:
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       - /opt/ai/compose/litellm-config.yml:/app/config.yaml:ro
-      - /opt/ai/litellm-db:/data
 
   # vLLM FAST (Qwen 7B) — concurrencia 2-3, rápido
   vllm-fast:

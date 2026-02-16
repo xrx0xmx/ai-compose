@@ -17,10 +17,13 @@ services:
       timeout: 5s
       retries: 5
 
+  postgres:
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+
   litellm:
     volumes:
       - ./litellm-config.local.yml:/app/config.yaml:ro
-      - ./data/litellm-db:/data
     depends_on:
       ollama:
         condition: service_healthy
