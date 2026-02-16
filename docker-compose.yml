@@ -6,12 +6,14 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: postgres
+    entrypoint: ["/scripts/pg-entrypoint.sh"]
     environment:
       POSTGRES_DB: litellm
       POSTGRES_USER: litellm
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme_pg}
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      - ./scripts/pg-entrypoint.sh:/scripts/pg-entrypoint.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U litellm"]
       interval: 10s
