@@ -1,0 +1,62 @@
+# ============================================================
+# Producción: vLLM con GPU NVIDIA (servidor Debian + RTX 6000)
+# Uso: docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile fast up -d
+# ============================================================
+services:
+  litellm:
+    volumes:
+      - /opt/ai/compose/litellm-config.yml:/app/config.yaml:ro
+      - /opt/ai/litellm-db:/data
+
+  # vLLM FAST (Qwen 7B) — concurrencia 2-3, rápido
+  vllm-fast:
+    image: vllm/vllm-openai:v0.5.4
+    container_name: vllm-fast
+    runtime: nvidia
+    ports:
+      - "8001:8000"
+    environment:
+      - HUGGING_FACE_HUB_CACHE=/data/hf-cache
+    volumes:
+      - /opt/ai/hf-cache:/data/hf-cache
+    command:
+      [
+        "--model","Qwen/Qwen2.5-7B-Instruct",
+        "--host","0.0.0.0",
+        "--port","8000",
+        "--dtype","half",
+        "--max-model-len","4096",
+        "--gpu-memory-utilization","0.55",
+        "--max-num-seqs","2"
+      ]
+    restart: unless-stopped
+    profiles: ["fast"]
+
+  # vLLM QUALITY (Qwen 14B AWQ) — solo cuando lo necesites
+  vllm-quality:
+    image: vllm/vllm-openai:v0.5.4
+    container_name: vllm-quality
+    runtime: nvidia
+    ports:
+      - "8002:8000"
+    environment:
+      - HUGGING_FACE_HUB_CACHE=/data/hf-cache
+    volumes:
+      - /opt/ai/hf-cache:/data/hf-cache
+    command:
+      [
+        "--model","Qwen/Qwen2.5-14B-Instruct-AWQ",
+        "--host","0.0.0.0",
+        "--port","8000",
+        "--dtype","half",
+        "--quantization","awq",
+        "--max-model-len","3072",
+        "--gpu-memory-utilization","0.85",
+        "--max-num-seqs","1"
+      ]
+    restart: unless-stopped
+    profiles: ["quality"]
+
+  open-webui:
+    volumes:
+      - /opt/ai/openwebui-data:/app/backend/data

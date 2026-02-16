@@ -1,0 +1,32 @@
+# ============================================================
+# Base: LiteLLM + Open WebUI (sin backend de inferencia)
+# Se complementa con docker-compose.local.yml o docker-compose.prod.yml
+# ============================================================
+services:
+  litellm:
+    image: litellm/litellm:latest
+    container_name: litellm
+    ports:
+      - "4000:4000"
+    environment:
+      - DATABASE_URL=sqlite:////data/litellm.db
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--num_workers", "1"]
+    restart: unless-stopped
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    ports:
+      - "3000:8080"
+    environment:
+      - OPENAI_API_BASE_URL=http://litellm:4000/v1
+      - OPENAI_API_KEY=${LITELLM_KEY:-cambiaLAclave}
+      - ENABLE_FORWARD_USER_INFO_HEADERS=True
+    restart: unless-stopped
+    depends_on:
+      - litellm
+    profiles: ["webui"]
+
+networks:
+  default:
+    name: ai_default

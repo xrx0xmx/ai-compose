@@ -1,0 +1,8 @@
+model_list:
+  - model_name: qwen-fast
+    litellm_params:
+      model: ollama/qwen2.5:7b
+      api_base: http://ollama:11434
+
+general_settings:
+  master_key: "cambiaLAclave"

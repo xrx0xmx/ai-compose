@@ -1,0 +1,30 @@
+# ============================================================
+# Local (Mac): Ollama como backend, sin GPU NVIDIA
+# Uso: docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+# ============================================================
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./data/ollama:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  litellm:
+    volumes:
+      - ./litellm-config.local.yml:/app/config.yaml:ro
+      - ./data/litellm-db:/data
+    depends_on:
+      ollama:
+        condition: service_healthy
+
+  open-webui:
+    volumes:
+      - ./data/openwebui:/app/backend/data
