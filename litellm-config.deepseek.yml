@@ -1,0 +1,10 @@
+model_list:
+  - model_name: deepseek-r1
+    litellm_params:
+      model: openai/casperhansen/deepseek-r1-distill-qwen-32b-awq
+      api_base: http://vllm-deepseek:8000/v1
+      api_key: EMPTY
+
+general_settings:
+  master_key: "cambiaLAclave"
+  database_url: "os.environ/DATABASE_URL"

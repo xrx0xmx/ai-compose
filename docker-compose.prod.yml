@@ -76,6 +76,37 @@ services:
     restart: unless-stopped
     profiles: ["quality"]
 
+  # vLLM DEEPSEEK (DeepSeek-R1-Distill-Qwen-32B AWQ) — razonamiento
+  vllm-deepseek:
+    image: vllm/vllm-openai:v0.5.4
+    container_name: vllm-deepseek
+    runtime: nvidia
+    ports:
+      - "8003:8000"
+    environment:
+      - HUGGING_FACE_HUB_CACHE=/data/hf-cache
+    volumes:
+      - /opt/ai/hf-cache:/data/hf-cache
+    command:
+      [
+        "--model","casperhansen/deepseek-r1-distill-qwen-32b-awq",
+        "--host","0.0.0.0",
+        "--port","8000",
+        "--dtype","half",
+        "--quantization","awq_marlin",
+        "--max-model-len","4096",
+        "--gpu-memory-utilization","0.90",
+        "--max-num-seqs","1"
+      ]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 180s
+    restart: unless-stopped
+    profiles: ["deepseek"]
+
   open-webui:
     volumes:
       - /opt/ai/openwebui-data:/app/backend/data

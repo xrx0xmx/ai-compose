@@ -14,6 +14,7 @@ Docker Compose infrastructure for serving Qwen LLMs via an OpenAI-compatible API
 Clients (port 4000) → LiteLLM Proxy → Ollama (local, port 11434)
                                      → vllm-fast  (prod, Qwen 7B,     port 8001)
                                      → vllm-quality (prod, Qwen 14B-AWQ, port 8002)
+                                     → vllm-deepseek (prod, DeepSeek-R1 32B-AWQ, port 8003)
 Open WebUI (port 3000) → LiteLLM
 ```
 
@@ -26,6 +27,7 @@ Open WebUI (port 3000) → LiteLLM
 | `docker-compose.prod.yml` | Prod override: adds vLLM services with GPU, uses `/opt/ai/` paths |
 | `litellm-config.fast.yml` | Model routing for prod fast profile |
 | `litellm-config.quality.yml` | Model routing for prod quality profile |
+| `litellm-config.deepseek.yml` | Model routing for prod deepseek profile |
 | `litellm-config.local.yml` | Model routing for local (Ollama backend) |
 | `Makefile` | `local-*` and `prod-*` targets |
 
@@ -45,6 +47,7 @@ make local-logs     # Tail logs
 ```
 make prod-fast      # LiteLLM + vLLM Qwen 7B
 make prod-quality   # LiteLLM + vLLM Qwen 14B AWQ
+make prod-deepseek  # LiteLLM + vLLM DeepSeek-R1 32B AWQ
 make prod-web       # Add Open WebUI
 make prod-down      # Stop everything
 ```
@@ -61,6 +64,7 @@ make test           # Chat completion against qwen-fast
 
 - **vllm-fast**: Qwen 2.5-7B-AWQ, 55% GPU (≈13GB), 4 concurrent seqs, 4096 tokens max
 - **vllm-quality**: Qwen 2.5-14B-AWQ, 85% GPU (≈20GB), 1 concurrent seq, 3072 tokens max
+- **vllm-deepseek**: DeepSeek-R1-Distill-Qwen-32B-AWQ, 90% GPU (≈21.6GB), 1 concurrent seq, 4096 tokens max
 - Profiles are mutually exclusive — run one at a time on the 24GB RTX 6000
 
 ## Server Directory Layout
