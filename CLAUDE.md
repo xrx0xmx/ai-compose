@@ -58,7 +58,7 @@ make test           # Chat completion against qwen-fast
 
 ## Production GPU Config
 
-- **vllm-fast**: Qwen 2.5-7B, 70% GPU (≈16.8GB), 2 concurrent seqs, 4096 tokens max
+- **vllm-fast**: Qwen 2.5-7B-AWQ, 55% GPU (≈13GB), 4 concurrent seqs, 4096 tokens max
 - **vllm-quality**: Qwen 2.5-14B-AWQ, 85% GPU (≈20GB), 1 concurrent seq, 3072 tokens max
 - Profiles are mutually exclusive — run one at a time on the 24GB RTX 6000
 

@@ -27,14 +27,21 @@ services:
       - /opt/ai/hf-cache:/data/hf-cache
     command:
       [
-        "--model","Qwen/Qwen2.5-7B-Instruct",
+        "--model","Qwen/Qwen2.5-7B-Instruct-AWQ",
         "--host","0.0.0.0",
         "--port","8000",
         "--dtype","half",
+        "--quantization","awq",
         "--max-model-len","4096",
-        "--gpu-memory-utilization","0.70",
-        "--max-num-seqs","2"
+        "--gpu-memory-utilization","0.55",
+        "--max-num-seqs","4"
       ]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
     restart: unless-stopped
     profiles: ["fast"]
 
@@ -60,6 +67,12 @@ services:
         "--gpu-memory-utilization","0.85",
         "--max-num-seqs","1"
       ]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
     restart: unless-stopped
     profiles: ["quality"]
 
