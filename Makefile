@@ -51,6 +51,10 @@ prod-ps:           ; $(PROD) ps
 prod-logs:         ; $(PROD) logs -f --tail=200
 prod-pull:         ; $(PROD) --profile qwen-fast --profile qwen-quality --profile deepseek --profile qwen-max --profile webui pull
 prod-restart:      ; $(PROD) restart
+prod-switch:       ; sudo /opt/ai/compose/scripts/switch-model.sh switch $(MODEL)
+prod-status:       ; /opt/ai/compose/scripts/switch-model.sh status
+prod-list-models:  ; /opt/ai/compose/scripts/switch-model.sh list
+prod-stop-models:  ; sudo /opt/ai/compose/scripts/switch-model.sh stop
 
 # --- Smoke tests (funcionan en ambos entornos) ---
 models:             ; curl -s http://127.0.0.1:4000/v1/models -H "Authorization: Bearer $(KEY)" | jq
@@ -85,4 +89,5 @@ ssh:       ; ssh somia
 
 .PHONY: local-up local-web local-down local-ps local-logs local-pull local-init \
         prod-qwen-fast prod-qwen-quality prod-deepseek prod-qwen-max prod-down prod-ps prod-logs prod-pull prod-restart \
+        prod-switch prod-status prod-list-models prod-stop-models \
         models test-qwen-fast test-qwen-quality test-deepseek test-qwen-max vpn-up vpn-down vpn-status ssh

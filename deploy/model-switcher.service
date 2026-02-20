@@ -1,0 +1,21 @@
+[Unit]
+Description=AI Model Switcher API
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=aiswitch
+Group=aiswitch
+WorkingDirectory=/opt/ai/compose
+Environment=PYTHONPATH=/opt/ai/compose
+EnvironmentFile=/opt/ai/compose/deploy/model-switcher.env
+ExecStart=/usr/bin/python3 -m uvicorn control.app:app --host ${MODEL_SWITCHER_BIND} --port ${MODEL_SWITCHER_PORT}
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

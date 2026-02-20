@@ -141,3 +141,5 @@ services:
   open-webui:
     volumes:
       - /opt/ai/openwebui-data:/app/backend/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
