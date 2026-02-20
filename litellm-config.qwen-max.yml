@@ -1,8 +1,8 @@
 model_list:
-  - model_name: glm-flash
+  - model_name: qwen-max
     litellm_params:
-      model: openai/cyankiwi/GLM-4.7-Flash-AWQ-4bit
-      api_base: http://vllm-glm:8000/v1
+      model: openai/Qwen/Qwen2.5-32B-Instruct-AWQ
+      api_base: http://vllm-qwen32b:8000/v1
       api_key: EMPTY
 
 general_settings:

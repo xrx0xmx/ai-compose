@@ -107,10 +107,10 @@ services:
     restart: unless-stopped
     profiles: ["deepseek"]
 
-  # vLLM GLM (GLM-4.7-Flash AWQ) — razonamiento ligero
-  vllm-glm:
-    image: vllm/vllm-openai:v0.15.1
-    container_name: vllm-glm
+  # vLLM QWEN-MAX (Qwen 2.5-32B AWQ) — máxima calidad
+  vllm-qwen32b:
+    image: vllm/vllm-openai:v0.5.4
+    container_name: vllm-qwen32b
     runtime: nvidia
     ports:
       - "8004:8000"
@@ -120,14 +120,14 @@ services:
       - /opt/ai/hf-cache:/data/hf-cache
     command:
       [
-        "--model","cyankiwi/GLM-4.7-Flash-AWQ-4bit",
+        "--model","Qwen/Qwen2.5-32B-Instruct-AWQ",
         "--host","0.0.0.0",
         "--port","8000",
         "--dtype","half",
         "--quantization","awq",
-        "--max-model-len","4096",
-        "--gpu-memory-utilization","0.85",
-        "--max-num-seqs","2"
+        "--max-model-len","2048",
+        "--gpu-memory-utilization","0.95",
+        "--max-num-seqs","1"
       ]
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
@@ -136,7 +136,7 @@ services:
       retries: 20
       start_period: 180s
     restart: unless-stopped
-    profiles: ["glm"]
+    profiles: ["qwen-max"]
 
   open-webui:
     volumes:
