@@ -19,9 +19,31 @@ local-init:    ; docker exec ollama ollama pull qwen2.5:7b
 # --- Producción (servidor con GPU) ---
 PROD=cd /opt/ai/compose && docker compose -f docker-compose.yml -f docker-compose.prod.yml
 
+WAIT_TIMEOUT ?= 300
+
+define wait-healthy
+	@echo "⏳ Waiting for $(1) to be healthy..."
+	@elapsed=0; \
+	while [ $$elapsed -lt $(WAIT_TIMEOUT) ]; do \
+		status=$$(docker inspect --format='{{.State.Health.Status}}' $(1) 2>/dev/null); \
+		if [ "$$status" = "healthy" ]; then \
+			echo "✅ $(1) is healthy and ready!"; \
+			exit 0; \
+		fi; \
+		sleep 5; \
+		elapsed=$$((elapsed + 5)); \
+		echo "⏳ Waiting for $(1) to be healthy... ($${elapsed}s)"; \
+	done; \
+	echo "❌ Timeout: $(1) did not become healthy within $(WAIT_TIMEOUT)s"; \
+	exit 1
+endef
+
 prod-qwen-fast:    ; ln -sf /opt/ai/compose/litellm-config.qwen-fast.yml /opt/ai/compose/litellm-active.yml && $(PROD) --profile qwen-fast --profile webui up -d
+	$(call wait-healthy,vllm-fast)
 prod-qwen-quality: ; ln -sf /opt/ai/compose/litellm-config.qwen-quality.yml /opt/ai/compose/litellm-active.yml && $(PROD) --profile qwen-quality --profile webui up -d
+	$(call wait-healthy,vllm-quality)
 prod-deepseek:     ; ln -sf /opt/ai/compose/litellm-config.deepseek.yml /opt/ai/compose/litellm-active.yml && $(PROD) --profile deepseek --profile webui up -d
+	$(call wait-healthy,vllm-deepseek)
 prod-down:         ; $(PROD) --profile qwen-fast --profile qwen-quality --profile deepseek --profile webui down
 prod-ps:           ; $(PROD) ps
 prod-logs:         ; $(PROD) logs -f --tail=200
