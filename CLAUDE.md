@@ -53,11 +53,13 @@ make prod-down         # Stop everything
 
 ### Smoke tests (both environments)
 ```
-make models         # List models via LiteLLM API
-make test           # Chat completion against qwen-fast
+make models             # List models via LiteLLM API
+make test-qwen-fast     # Chat completion against qwen-fast
+make test-qwen-quality  # Chat completion against qwen-quality
+make test-deepseek      # Chat completion against deepseek-r1
 ```
 
-`KEY=mykey make test` overrides the default master key.
+`KEY=mykey make test-qwen-fast` overrides the default master key.
 
 ## Production GPU Config
 

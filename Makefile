@@ -29,13 +29,22 @@ prod-pull:         ; $(PROD) --profile qwen-fast --profile qwen-quality --profil
 prod-restart:      ; $(PROD) restart
 
 # --- Smoke tests (funcionan en ambos entornos) ---
-MODEL ?= qwen-fast
-models:  ; curl -s http://127.0.0.1:4000/v1/models -H "Authorization: Bearer $(KEY)" | jq
-test:    ; curl -s http://127.0.0.1:4000/v1/chat/completions \
-           -H "Authorization: Bearer $(KEY)" \
-           -H "Content-Type: application/json" \
-           -d '{"model":"$(MODEL)","messages":[{"role":"user","content":"Di hola en castellano."}],"temperature":0.2}' \
-           | jq -r '.choices[0].message.content'
+models:             ; curl -s http://127.0.0.1:4000/v1/models -H "Authorization: Bearer $(KEY)" | jq
+test-qwen-fast:     ; curl -s http://127.0.0.1:4000/v1/chat/completions \
+                      -H "Authorization: Bearer $(KEY)" \
+                      -H "Content-Type: application/json" \
+                      -d '{"model":"qwen-fast","messages":[{"role":"user","content":"Di hola en castellano."}],"temperature":0.2}' \
+                      | jq -r '.choices[0].message.content'
+test-qwen-quality:  ; curl -s http://127.0.0.1:4000/v1/chat/completions \
+                      -H "Authorization: Bearer $(KEY)" \
+                      -H "Content-Type: application/json" \
+                      -d '{"model":"qwen-quality","messages":[{"role":"user","content":"Di hola en castellano."}],"temperature":0.2}' \
+                      | jq -r '.choices[0].message.content'
+test-deepseek:      ; curl -s http://127.0.0.1:4000/v1/chat/completions \
+                      -H "Authorization: Bearer $(KEY)" \
+                      -H "Content-Type: application/json" \
+                      -d '{"model":"deepseek-r1","messages":[{"role":"user","content":"Di hola en castellano."}],"temperature":0.2}' \
+                      | jq -r '.choices[0].message.content'
 
 # --- VPN (WireGuard) ---
 vpn-up:    ; sudo wg-quick up somia-adam
@@ -47,4 +56,4 @@ ssh:       ; ssh somia
 
 .PHONY: local-up local-web local-down local-ps local-logs local-pull local-init \
         prod-qwen-fast prod-qwen-quality prod-deepseek prod-down prod-ps prod-logs prod-pull prod-restart \
-        models test vpn-up vpn-down vpn-status ssh
+        models test-qwen-fast test-qwen-quality test-deepseek vpn-up vpn-down vpn-status ssh
