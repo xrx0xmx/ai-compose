@@ -19,16 +19,14 @@ local-init:    ; docker exec ollama ollama pull qwen2.5:7b
 # --- Producción (servidor con GPU) ---
 PROD=cd /opt/ai/compose && docker compose -f docker-compose.yml -f docker-compose.prod.yml
 
-prod-fast:     ; ln -sf /opt/ai/compose/litellm-config.fast.yml /opt/ai/compose/litellm-active.yml && $(PROD) --profile fast up -d
-prod-quality:  ; ln -sf /opt/ai/compose/litellm-config.quality.yml /opt/ai/compose/litellm-active.yml && $(PROD) --profile quality up -d
-prod-deepseek: ; ln -sf /opt/ai/compose/litellm-config.deepseek.yml /opt/ai/compose/litellm-active.yml && $(PROD) --profile deepseek up -d
-prod-web:      ; $(PROD) --profile fast --profile webui up -d
-prod-all:      ; $(PROD) --profile fast --profile webui up -d
-prod-down:     ; $(PROD) --profile fast --profile quality --profile deepseek --profile webui down
-prod-ps:       ; $(PROD) ps
-prod-logs:     ; $(PROD) logs -f --tail=200
-prod-pull:     ; $(PROD) --profile fast --profile quality --profile deepseek --profile webui pull
-prod-restart:  ; $(PROD) restart
+prod-qwen-fast:    ; ln -sf /opt/ai/compose/litellm-config.qwen-fast.yml /opt/ai/compose/litellm-active.yml && $(PROD) --profile qwen-fast --profile webui up -d
+prod-qwen-quality: ; ln -sf /opt/ai/compose/litellm-config.qwen-quality.yml /opt/ai/compose/litellm-active.yml && $(PROD) --profile qwen-quality --profile webui up -d
+prod-deepseek:     ; ln -sf /opt/ai/compose/litellm-config.deepseek.yml /opt/ai/compose/litellm-active.yml && $(PROD) --profile deepseek --profile webui up -d
+prod-down:         ; $(PROD) --profile qwen-fast --profile qwen-quality --profile deepseek --profile webui down
+prod-ps:           ; $(PROD) ps
+prod-logs:         ; $(PROD) logs -f --tail=200
+prod-pull:         ; $(PROD) --profile qwen-fast --profile qwen-quality --profile deepseek --profile webui pull
+prod-restart:      ; $(PROD) restart
 
 # --- Smoke tests (funcionan en ambos entornos) ---
 MODEL ?= qwen-fast
@@ -48,5 +46,5 @@ vpn-status: ; sudo wg show
 ssh:       ; ssh somia
 
 .PHONY: local-up local-web local-down local-ps local-logs local-pull local-init \
-        prod-fast prod-quality prod-deepseek prod-web prod-all prod-down prod-ps prod-logs prod-pull prod-restart \
+        prod-qwen-fast prod-qwen-quality prod-deepseek prod-down prod-ps prod-logs prod-pull prod-restart \
         models test vpn-up vpn-down vpn-status ssh

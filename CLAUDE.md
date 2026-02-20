@@ -25,8 +25,8 @@ Open WebUI (port 3000) → LiteLLM
 | `docker-compose.yml` | Base services: LiteLLM + Open WebUI |
 | `docker-compose.local.yml` | Local override: adds Ollama, uses `./data/` for volumes |
 | `docker-compose.prod.yml` | Prod override: adds vLLM services with GPU, uses `/opt/ai/` paths |
-| `litellm-config.fast.yml` | Model routing for prod fast profile |
-| `litellm-config.quality.yml` | Model routing for prod quality profile |
+| `litellm-config.qwen-fast.yml` | Model routing for prod qwen-fast profile |
+| `litellm-config.qwen-quality.yml` | Model routing for prod qwen-quality profile |
 | `litellm-config.deepseek.yml` | Model routing for prod deepseek profile |
 | `litellm-config.local.yml` | Model routing for local (Ollama backend) |
 | `Makefile` | `local-*` and `prod-*` targets |
@@ -45,11 +45,10 @@ make local-logs     # Tail logs
 
 ### Production (GPU server)
 ```
-make prod-fast      # LiteLLM + vLLM Qwen 7B
-make prod-quality   # LiteLLM + vLLM Qwen 14B AWQ
-make prod-deepseek  # LiteLLM + vLLM DeepSeek-R1 32B AWQ
-make prod-web       # Add Open WebUI
-make prod-down      # Stop everything
+make prod-qwen-fast    # Start all: infra + vLLM Qwen 7B + Web UI
+make prod-qwen-quality # Start all: infra + vLLM Qwen 14B AWQ + Web UI
+make prod-deepseek     # Start all: infra + vLLM DeepSeek-R1 32B AWQ + Web UI
+make prod-down         # Stop everything
 ```
 
 ### Smoke tests (both environments)

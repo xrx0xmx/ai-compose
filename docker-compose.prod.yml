@@ -1,6 +1,6 @@
 # ============================================================
 # Producción: vLLM con GPU NVIDIA (servidor Debian + RTX 6000)
-# Uso: docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile fast up -d
+# Uso: docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile qwen-fast up -d
 # ============================================================
 services:
   postgres:
@@ -43,7 +43,7 @@ services:
       retries: 20
       start_period: 120s
     restart: unless-stopped
-    profiles: ["fast"]
+    profiles: ["qwen-fast"]
 
   # vLLM QUALITY (Qwen 14B AWQ) — solo cuando lo necesites
   vllm-quality:
@@ -74,7 +74,7 @@ services:
       retries: 20
       start_period: 120s
     restart: unless-stopped
-    profiles: ["quality"]
+    profiles: ["qwen-quality"]
 
   # vLLM DEEPSEEK (DeepSeek-R1-Distill-Qwen-32B AWQ) — razonamiento
   vllm-deepseek:
