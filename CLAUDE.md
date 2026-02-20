@@ -15,6 +15,7 @@ Clients (port 4000) → LiteLLM Proxy → Ollama (local, port 11434)
                                      → vllm-fast  (prod, Qwen 7B,     port 8001)
                                      → vllm-quality (prod, Qwen 14B-AWQ, port 8002)
                                      → vllm-deepseek (prod, DeepSeek-R1 32B-AWQ, port 8003)
+                                     → vllm-glm     (prod, GLM-4.7-Flash AWQ, port 8004)
 Open WebUI (port 3000) → LiteLLM
 ```
 
@@ -28,6 +29,7 @@ Open WebUI (port 3000) → LiteLLM
 | `litellm-config.qwen-fast.yml` | Model routing for prod qwen-fast profile |
 | `litellm-config.qwen-quality.yml` | Model routing for prod qwen-quality profile |
 | `litellm-config.deepseek.yml` | Model routing for prod deepseek profile |
+| `litellm-config.glm.yml` | Model routing for prod glm profile |
 | `litellm-config.local.yml` | Model routing for local (Ollama backend) |
 | `Makefile` | `local-*` and `prod-*` targets |
 
@@ -48,6 +50,7 @@ make local-logs     # Tail logs
 make prod-qwen-fast    # Start all: infra + vLLM Qwen 7B + Web UI
 make prod-qwen-quality # Start all: infra + vLLM Qwen 14B AWQ + Web UI
 make prod-deepseek     # Start all: infra + vLLM DeepSeek-R1 32B AWQ + Web UI
+make prod-glm          # Start all: infra + vLLM GLM-4.7-Flash AWQ + Web UI
 make prod-down         # Stop everything
 ```
 
@@ -57,6 +60,7 @@ make models             # List models via LiteLLM API
 make test-qwen-fast     # Chat completion against qwen-fast
 make test-qwen-quality  # Chat completion against qwen-quality
 make test-deepseek      # Chat completion against deepseek-r1
+make test-glm           # Chat completion against glm-flash
 ```
 
 `KEY=mykey make test-qwen-fast` overrides the default master key.
@@ -65,7 +69,8 @@ make test-deepseek      # Chat completion against deepseek-r1
 
 - **vllm-fast**: Qwen 2.5-7B-AWQ, 55% GPU (≈13GB), 4 concurrent seqs, 4096 tokens max
 - **vllm-quality**: Qwen 2.5-14B-AWQ, 85% GPU (≈20GB), 1 concurrent seq, 3072 tokens max
-- **vllm-deepseek**: DeepSeek-R1-Distill-Qwen-32B-AWQ, 90% GPU (≈21.6GB), 1 concurrent seq, 4096 tokens max
+- **vllm-deepseek**: DeepSeek-R1-Distill-Qwen-14B-AWQ, 85% GPU (≈18.7GB), 2 concurrent seqs, 4096 tokens max
+- **vllm-glm**: GLM-4.7-Flash-AWQ, 85% GPU (≈18.7GB), 2 concurrent seqs, 4096 tokens max
 - Profiles are mutually exclusive — run one at a time on the 24GB RTX 6000
 
 ## Server Directory Layout

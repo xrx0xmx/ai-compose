@@ -1,8 +1,8 @@
 model_list:
-  - model_name: deepseek-r1
+  - model_name: glm-flash
     litellm_params:
-      model: openai/casperhansen/deepseek-r1-distill-qwen-14b-awq
-      api_base: http://vllm-deepseek:8000/v1
+      model: openai/cyankiwi/GLM-4.7-Flash-AWQ-4bit
+      api_base: http://vllm-glm:8000/v1
       api_key: EMPTY
 
 general_settings:

@@ -44,10 +44,12 @@ prod-qwen-quality: ; ln -sf /opt/ai/compose/litellm-config.qwen-quality.yml /opt
 	$(call wait-healthy,vllm-quality)
 prod-deepseek:     ; ln -sf /opt/ai/compose/litellm-config.deepseek.yml /opt/ai/compose/litellm-active.yml && $(PROD) --profile deepseek --profile webui up -d
 	$(call wait-healthy,vllm-deepseek)
-prod-down:         ; $(PROD) --profile qwen-fast --profile qwen-quality --profile deepseek --profile webui down
+prod-glm:          ; ln -sf /opt/ai/compose/litellm-config.glm.yml /opt/ai/compose/litellm-active.yml && $(PROD) --profile glm --profile webui up -d
+	$(call wait-healthy,vllm-glm)
+prod-down:         ; $(PROD) --profile qwen-fast --profile qwen-quality --profile deepseek --profile glm --profile webui down
 prod-ps:           ; $(PROD) ps
 prod-logs:         ; $(PROD) logs -f --tail=200
-prod-pull:         ; $(PROD) --profile qwen-fast --profile qwen-quality --profile deepseek --profile webui pull
+prod-pull:         ; $(PROD) --profile qwen-fast --profile qwen-quality --profile deepseek --profile glm --profile webui pull
 prod-restart:      ; $(PROD) restart
 
 # --- Smoke tests (funcionan en ambos entornos) ---
@@ -67,6 +69,11 @@ test-deepseek:      ; curl -s http://127.0.0.1:4000/v1/chat/completions \
                       -H "Content-Type: application/json" \
                       -d '{"model":"deepseek-r1","messages":[{"role":"user","content":"Di hola en castellano."}],"temperature":0.2}' \
                       | jq -r '.choices[0].message.content'
+test-glm:           ; curl -s http://127.0.0.1:4000/v1/chat/completions \
+                      -H "Authorization: Bearer $(KEY)" \
+                      -H "Content-Type: application/json" \
+                      -d '{"model":"glm-flash","messages":[{"role":"user","content":"Di hola en castellano."}],"temperature":0.2}' \
+                      | jq -r '.choices[0].message.content'
 
 # --- VPN (WireGuard) ---
 vpn-up:    ; sudo wg-quick up somia-adam
@@ -77,5 +84,5 @@ vpn-status: ; sudo wg show
 ssh:       ; ssh somia
 
 .PHONY: local-up local-web local-down local-ps local-logs local-pull local-init \
-        prod-qwen-fast prod-qwen-quality prod-deepseek prod-down prod-ps prod-logs prod-pull prod-restart \
-        models test-qwen-fast test-qwen-quality test-deepseek vpn-up vpn-down vpn-status ssh
+        prod-qwen-fast prod-qwen-quality prod-deepseek prod-glm prod-down prod-ps prod-logs prod-pull prod-restart \
+        models test-qwen-fast test-qwen-quality test-deepseek test-glm vpn-up vpn-down vpn-status ssh
