@@ -29,5 +29,7 @@ services:
         condition: service_healthy
 
   open-webui:
+    ports:
+      - "3000:8080"
     volumes:
       - ./data/openwebui:/app/backend/data

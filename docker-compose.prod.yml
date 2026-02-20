@@ -42,6 +42,11 @@ services:
       timeout: 10s
       retries: 20
       start_period: 120s
+    labels:
+      - ai.model.id=qwen-fast
+      - ai.model.display_name=Qwen 2.5 7B AWQ (Fast)
+      - ai.model.profile=qwen-fast
+      - ai.model.litellm_config=litellm-config.qwen-fast.yml
     restart: unless-stopped
     profiles: ["qwen-fast"]
 
@@ -73,6 +78,11 @@ services:
       timeout: 10s
       retries: 20
       start_period: 120s
+    labels:
+      - ai.model.id=qwen-quality
+      - ai.model.display_name=Qwen 2.5 14B AWQ (Quality)
+      - ai.model.profile=qwen-quality
+      - ai.model.litellm_config=litellm-config.qwen-quality.yml
     restart: unless-stopped
     profiles: ["qwen-quality"]
 
@@ -104,6 +114,11 @@ services:
       timeout: 10s
       retries: 20
       start_period: 180s
+    labels:
+      - ai.model.id=deepseek-r1
+      - ai.model.display_name=DeepSeek R1 Distill Qwen 14B AWQ
+      - ai.model.profile=deepseek
+      - ai.model.litellm_config=litellm-config.deepseek.yml
     restart: unless-stopped
     profiles: ["deepseek"]
 
@@ -135,9 +150,48 @@ services:
       timeout: 10s
       retries: 20
       start_period: 180s
+    labels:
+      - ai.model.id=qwen-max
+      - ai.model.display_name=Qwen 2.5 32B AWQ (Max)
+      - ai.model.profile=qwen-max
+      - ai.model.litellm_config=litellm-config.qwen-max.yml
     restart: unless-stopped
     profiles: ["qwen-max"]
 
   open-webui:
     volumes:
       - /opt/ai/openwebui-data:/app/backend/data
+
+  model-switcher:
+    build:
+      context: .
+      dockerfile: model-switcher/Dockerfile
+    container_name: model-switcher
+    environment:
+      - MODEL_SWITCHER_ADMIN_TOKEN=${MODEL_SWITCHER_ADMIN_TOKEN:-change-this-admin-token}
+      - MODEL_SWITCHER_COMPOSE_DIR=/opt/ai/compose
+      - MODEL_SWITCHER_LITELLM_KEY=${LITELLM_KEY:-cambiaLAclave}
+      - MODEL_SWITCHER_AUDIT_FILE=/opt/ai/compose/model-switcher-audit.log
+      - MODEL_SWITCHER_STATE_FILE=/opt/ai/compose/.active-model.json
+      - MODEL_SWITCHER_RATE_LIMIT_PER_MINUTE=5
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /opt/ai/compose:/opt/ai/compose
+    depends_on:
+      - litellm
+      - open-webui
+    restart: unless-stopped
+    profiles: ["webui"]
+
+  ui-gateway:
+    image: nginx:1.27-alpine
+    container_name: ui-gateway
+    ports:
+      - "3000:80"
+    volumes:
+      - /opt/ai/compose/model-switcher/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - open-webui
+      - model-switcher
+    restart: unless-stopped
+    profiles: ["webui"]
