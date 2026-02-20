@@ -1,3 +1,7 @@
 data/
 .env
 litellm-active.yml
+
+# Python cache
+__pycache__/
+*.pyc
