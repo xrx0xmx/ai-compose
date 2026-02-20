@@ -50,6 +50,7 @@ services:
 
 volumes:
   postgres-data:
+  litellm-config:
 
 networks:
   default:

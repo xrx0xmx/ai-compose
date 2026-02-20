@@ -10,8 +10,7 @@ litellm-config.yml          # Config LiteLLM → vLLM (producción)
 litellm-config.local.yml    # Config LiteLLM → Ollama (local)
 Makefile                    # Atajos local-* y prod-*
 control/                    # API HTTP para cambiar modelos
-deploy/                     # Systemd + env del model switcher
-scripts/switch-model.sh     # Script de switch (host)
+control/Dockerfile          # Imagen del model switcher
 ```
 
 ## Probar en local (Mac)
@@ -33,60 +32,47 @@ Directorios en el servidor (propiedad de aiservices:aiservices):
 - `/opt/ai/openwebui-data/`  — datos de Open WebUI
 
 ```bash
-make prod-fast       # LiteLLM + vLLM Qwen 7B
-make prod-quality    # LiteLLM + vLLM Qwen 14B AWQ
+make prod-qwen-fast       # LiteLLM + vLLM Qwen 7B
+make prod-qwen-quality    # LiteLLM + vLLM Qwen 14B AWQ
 make prod-web        # Añade Open WebUI
 make prod-down       # Para todo
 ```
 
 ## Model switcher (control desde Open WebUI)
 
-Permite que el admin de Open WebUI cambie el modelo activo sin SSH.
+Permite que el admin de Open WebUI cambie el modelo activo sin SSH, **todo dentro de Docker**.
 
-### 1) Preparar usuario y permisos (sudoers)
+Nota: el switcher solo puede **start/stop** contenedores ya creados. La primera vez, crea los contenedores de cada perfil con `make prod-qwen-fast`, `make prod-qwen-quality`, etc.
 
-```bash
-sudo useradd -m -s /bin/bash aiswitch
-sudo usermod -aG docker aiswitch
-echo 'aiswitch ALL=(root) NOPASSWD: /opt/ai/compose/scripts/switch-model.sh *' | sudo tee /etc/sudoers.d/ai-model-switcher
-```
-
-### 2) Dependencias Python
+### 1) Configurar token (en el host)
 
 ```bash
-python3 -m pip install -r /opt/ai/compose/control/requirements.txt
+cd /opt/ai/compose
+printf "MODEL_SWITCHER_TOKEN=tu_token_seguro\nMODEL_SWITCHER_DEFAULT=qwen-fast\n" >> .env
 ```
 
-### 3) Config env del servicio
+### 2) Arrancar servicios (incluye model-switcher)
 
 ```bash
-cp /opt/ai/compose/deploy/model-switcher.env.example /opt/ai/compose/deploy/model-switcher.env
-sudo sed -i 's/change_me/tu_token_seguro/' /opt/ai/compose/deploy/model-switcher.env
+docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile qwen-fast up -d
 ```
 
-### 4) Instalar systemd
+### 3) Configurar Open WebUI (admin)
 
-```bash
-sudo cp /opt/ai/compose/deploy/model-switcher.service /etc/systemd/system/model-switcher.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now model-switcher
-sudo systemctl status model-switcher
-```
-
-### 5) Configurar Open WebUI (admin)
-
-- URL OpenAPI: `http://host.docker.internal:9000/openapi.json`
+- URL OpenAPI: `http://model-switcher:9000/openapi.json`
 - Header: `Authorization: Bearer tu_token_seguro`
 - Restringir el Tool a usuarios admin.
 
-Nota: el servicio escucha en `0.0.0.0` para que el contenedor de Open WebUI pueda acceder. Si quieres limitar acceso, filtra el puerto 9000 con firewall y deja el token.
-
-### 6) Prueba rapida
+### 4) Prueba rápida (desde el host)
 
 ```bash
 curl -s http://127.0.0.1:9000/status -H "Authorization: Bearer tu_token_seguro"
 curl -s http://127.0.0.1:9000/switch -H "Authorization: Bearer tu_token_seguro" -H "Content-Type: application/json" -d '{"model":"qwen-fast"}'
 ```
+
+Notas de seguridad:
+- El switcher **no expone puertos públicos** (solo `127.0.0.1`).
+- Usa `docker-socket-proxy` con permisos mínimos (start/stop/inspect) en red interna.
 
 ## Smoke tests (ambos entornos)
 

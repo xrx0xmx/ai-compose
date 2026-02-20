@@ -5,6 +5,9 @@
 # --- Local (Mac) ---
 LOCAL=docker compose -f docker-compose.yml -f docker-compose.local.yml
 KEY ?= cambiaLAclave
+SWITCHER_TOKEN ?= $(MODEL_SWITCHER_TOKEN)
+SWITCHER_TOKEN := $(or $(SWITCHER_TOKEN),change_me)
+SWITCHER_URL ?= http://127.0.0.1:9000
 
 local-up:      ; $(LOCAL) up -d
 local-web:     ; $(LOCAL) --profile webui up -d
@@ -38,23 +41,27 @@ define wait-healthy
 	exit 1
 endef
 
-prod-qwen-fast:    ; ln -sf /opt/ai/compose/litellm-config.qwen-fast.yml /opt/ai/compose/litellm-active.yml && $(PROD) --profile qwen-fast --profile webui up -d
+prod-qwen-fast:    ; $(PROD) --profile qwen-fast --profile webui up -d
 	$(call wait-healthy,vllm-fast)
-prod-qwen-quality: ; ln -sf /opt/ai/compose/litellm-config.qwen-quality.yml /opt/ai/compose/litellm-active.yml && $(PROD) --profile qwen-quality --profile webui up -d
+	@$(MAKE) prod-switch MODEL=qwen-fast
+prod-qwen-quality: ; $(PROD) --profile qwen-quality --profile webui up -d
 	$(call wait-healthy,vllm-quality)
-prod-deepseek:     ; ln -sf /opt/ai/compose/litellm-config.deepseek.yml /opt/ai/compose/litellm-active.yml && $(PROD) --profile deepseek --profile webui up -d
+	@$(MAKE) prod-switch MODEL=qwen-quality
+prod-deepseek:     ; $(PROD) --profile deepseek --profile webui up -d
 	$(call wait-healthy,vllm-deepseek)
-prod-qwen-max:     ; ln -sf /opt/ai/compose/litellm-config.qwen-max.yml /opt/ai/compose/litellm-active.yml && $(PROD) --profile qwen-max --profile webui up -d
+	@$(MAKE) prod-switch MODEL=deepseek
+prod-qwen-max:     ; $(PROD) --profile qwen-max --profile webui up -d
 	$(call wait-healthy,vllm-qwen32b)
+	@$(MAKE) prod-switch MODEL=qwen-max
 prod-down:         ; $(PROD) --profile qwen-fast --profile qwen-quality --profile deepseek --profile qwen-max --profile webui down
 prod-ps:           ; $(PROD) ps
 prod-logs:         ; $(PROD) logs -f --tail=200
 prod-pull:         ; $(PROD) --profile qwen-fast --profile qwen-quality --profile deepseek --profile qwen-max --profile webui pull
 prod-restart:      ; $(PROD) restart
-prod-switch:       ; sudo /opt/ai/compose/scripts/switch-model.sh switch $(MODEL)
-prod-status:       ; /opt/ai/compose/scripts/switch-model.sh status
-prod-list-models:  ; /opt/ai/compose/scripts/switch-model.sh list
-prod-stop-models:  ; sudo /opt/ai/compose/scripts/switch-model.sh stop
+prod-switch:       ; curl -s $(SWITCHER_URL)/switch -H "Authorization: Bearer $(SWITCHER_TOKEN)" -H "Content-Type: application/json" -d '{"model":"$(MODEL)"}' | jq
+prod-status:       ; curl -s $(SWITCHER_URL)/status -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
+prod-list-models:  ; curl -s $(SWITCHER_URL)/models -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
+prod-stop-models:  ; curl -s $(SWITCHER_URL)/stop -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
 
 # --- Smoke tests (funcionan en ambos entornos) ---
 models:             ; curl -s http://127.0.0.1:4000/v1/models -H "Authorization: Bearer $(KEY)" | jq

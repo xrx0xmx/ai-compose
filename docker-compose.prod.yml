@@ -11,8 +11,61 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      model-switcher:
+        condition: service_healthy
+    command: ["--config", "/config/active.yml", "--port", "4000", "--num_workers", "1"]
     volumes:
-      - /opt/ai/compose/litellm-active.yml:/app/config.yaml:ro
+      - litellm-config:/config
+
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.1.1
+    container_name: docker-socket-proxy
+    environment:
+      - CONTAINERS=1
+      - POST=1
+      - GET=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - switcher-net
+    restart: unless-stopped
+
+  model-switcher:
+    build:
+      context: .
+      dockerfile: control/Dockerfile
+    container_name: model-switcher
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - MODEL_SWITCHER_TOKEN=${MODEL_SWITCHER_TOKEN:-change_me}
+      - MODEL_SWITCHER_DEFAULT=${MODEL_SWITCHER_DEFAULT:-qwen-fast}
+      - MODEL_SWITCHER_BIND=0.0.0.0
+      - MODEL_SWITCHER_PORT=9000
+      - DOCKER_PROXY_URL=http://docker-socket-proxy:2375
+      - MODEL_CONFIG_DIR=/config
+      - MODEL_TEMPLATE_DIR=/opt/model-configs
+    depends_on:
+      - docker-socket-proxy
+    volumes:
+      - litellm-config:/config
+    networks:
+      - default
+      - switcher-net
+    ports:
+      - "127.0.0.1:9000:9000"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:9000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
   # vLLM FAST (Qwen 7B AWQ) — concurrencia 4, rápido
   vllm-fast:
@@ -141,5 +194,7 @@ services:
   open-webui:
     volumes:
       - /opt/ai/openwebui-data:/app/backend/data
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+
+networks:
+  switcher-net:
+    internal: true
