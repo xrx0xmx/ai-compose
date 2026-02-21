@@ -13,14 +13,17 @@ control/                    # API HTTP para cambiar modelos
 control/Dockerfile          # Imagen del model switcher
 ```
 
+## Regla operativa
+
+Usa siempre `make` para operaciones de Docker en este proyecto.
+
 ## Probar en local (Mac)
 
 ```bash
-make local-up        # Arranca LiteLLM + Ollama
-make local-init      # Descarga qwen2.5:7b en Ollama (solo la primera vez)
-make test            # Smoke test
-make local-web       # Añade Open WebUI → http://localhost:3000
-make local-down      # Para todo
+make local-up
+make local-init
+make local-web
+make local-down
 ```
 
 ## Producción (servidor con GPU)
@@ -28,55 +31,75 @@ make local-down      # Para todo
 Directorios en el servidor (propiedad de aiservices:aiservices):
 - `/opt/ai/compose/`         — este proyecto
 - `/opt/ai/hf-cache/`        — cache HuggingFace compartida
-- `/opt/ai/litellm-db/`      — SQLite de LiteLLM
+- `/opt/ai/postgres/`        — datos de Postgres
 - `/opt/ai/openwebui-data/`  — datos de Open WebUI
 
+### Inicialización recomendada (una vez)
+
 ```bash
-make prod-qwen-fast       # LiteLLM + vLLM Qwen 7B
-make prod-qwen-quality    # LiteLLM + vLLM Qwen 14B AWQ
-make prod-web        # Añade Open WebUI
-make prod-down       # Para todo
+cd /opt/ai/compose
+make prod-bootstrap-models
+```
+
+Esto crea los contenedores `vllm-*` para evitar errores `container not found` al hacer switch.
+
+### Arranque por perfil
+
+```bash
+make prod-qwen-fast
+make prod-qwen-quality
+make prod-deepseek
+make prod-qwen-max
+make prod-down
 ```
 
 ## Model switcher (control desde Open WebUI)
 
-Permite que el admin de Open WebUI cambie el modelo activo sin SSH, **todo dentro de Docker**.
+Permite cambiar modelo desde un Tool OpenAPI en Open WebUI.
 
-Nota: el switcher solo puede **start/stop** contenedores ya creados. La primera vez, crea los contenedores de cada perfil con `make prod-qwen-fast`, `make prod-qwen-quality`, etc.
-
-### 1) Configurar token (en el host)
+### 1) Configurar token y defaults (host)
 
 ```bash
 cd /opt/ai/compose
 printf "MODEL_SWITCHER_TOKEN=tu_token_seguro\nMODEL_SWITCHER_DEFAULT=qwen-fast\n" >> .env
 ```
 
-### 2) Arrancar servicios (incluye model-switcher)
+### 2) Verificar estado
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile qwen-fast up -d
+MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-status
 ```
 
-### 3) Configurar Open WebUI (admin)
+### 3) Configurar Tool en Open WebUI (admin)
 
 - URL OpenAPI: `http://model-switcher:9000/openapi.json`
 - Header: `Authorization: Bearer tu_token_seguro`
 - Restringir el Tool a usuarios admin.
 
-### 4) Prueba rápida (desde el host)
+### 4) Prueba rápida desde host
 
 ```bash
-curl -s http://127.0.0.1:9000/status -H "Authorization: Bearer tu_token_seguro"
-curl -s http://127.0.0.1:9000/switch -H "Authorization: Bearer tu_token_seguro" -H "Content-Type: application/json" -d '{"model":"qwen-fast"}'
+MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-list-models
+MODEL_SWITCHER_TOKEN=tu_token_seguro MODEL=qwen-fast make prod-switch
 ```
 
-Notas de seguridad:
-- El switcher **no expone puertos públicos** (solo `127.0.0.1`).
-- Usa `docker-socket-proxy` con permisos mínimos (start/stop/inspect) en red interna.
+## Endpoints del switcher
 
-## Smoke tests (ambos entornos)
+- `GET /health`
+- `GET /healthz/ready`
+- `GET /models`
+- `GET /status`
+- `POST /switch` body: `{"model":"qwen-fast|qwen-quality|deepseek|qwen-max"}`
+- `POST /stop`
+
+`POST /switch` devuelve estado extendido: `status`, `from_model`, `to_model`, `steps`, `duration_ms`, `running_models`, `active_model`, `containers`.
+
+## Smoke tests
 
 ```bash
-make models          # Lista modelos en LiteLLM
-make test            # Chat completion contra qwen-fast
+make models
+make test-qwen-fast
+make test-qwen-quality
+make test-deepseek
+make test-qwen-max
 ```
