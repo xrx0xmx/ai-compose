@@ -4,7 +4,7 @@
 
 # --- Local (Mac) ---
 LOCAL=docker compose -f docker-compose.yml -f docker-compose.local.yml
-KEY ?= cambiaLAclave
+KEY ?= $(or $(LITELLM_KEY),cambiaLAclave)
 SWITCHER_TOKEN ?= $(MODEL_SWITCHER_TOKEN)
 SWITCHER_TOKEN := $(or $(SWITCHER_TOKEN),change_me)
 SWITCHER_URL ?= http://127.0.0.1:9000
@@ -20,41 +20,29 @@ local-pull:    ; $(LOCAL) --profile webui pull
 local-init:    ; docker exec ollama ollama pull qwen2.5:7b
 
 # --- Producción (servidor con GPU) ---
-PROD=cd /opt/ai/compose && docker compose -f docker-compose.yml -f docker-compose.prod.yml
+PROD_DIR ?= /opt/ai/compose
+PROD_COMPOSE=docker compose -f docker-compose.yml -f docker-compose.prod.yml
+PROD=cd $(PROD_DIR) && $(PROD_COMPOSE)
 PROD_MODEL_PROFILES=--profile qwen-fast --profile qwen-quality --profile deepseek --profile qwen-max
-
-WAIT_TIMEOUT ?= 300
-
-define wait-healthy
-	@echo "⏳ Waiting for $(1) to be healthy..."
-	@elapsed=0; \
-	while [ $$elapsed -lt $(WAIT_TIMEOUT) ]; do \
-		status=$$(docker inspect --format='{{.State.Health.Status}}' $(1) 2>/dev/null); \
-		if [ "$$status" = "healthy" ]; then \
-			echo "✅ $(1) is healthy and ready!"; \
-			exit 0; \
-		fi; \
-		sleep 5; \
-		elapsed=$$((elapsed + 5)); \
-		echo "⏳ Waiting for $(1) to be healthy... ($${elapsed}s)"; \
-	done; \
-	echo "❌ Timeout: $(1) did not become healthy within $(WAIT_TIMEOUT)s"; \
-	exit 1
-endef
 
 prod-bootstrap-models: ; $(PROD) $(PROD_MODEL_PROFILES) create vllm-fast vllm-quality vllm-deepseek vllm-qwen32b
 prod-build-switcher:  ; $(PROD) --profile webui build model-switcher
-prod-qwen-fast:    ; $(PROD) --profile qwen-fast --profile webui up -d
-	$(call wait-healthy,vllm-fast)
+prod-up:           ; $(PROD) --profile webui up -d
+prod-qwen-fast:
+	@$(MAKE) prod-up
+	@$(MAKE) prod-bootstrap-models
 	@$(MAKE) prod-switch MODEL=qwen-fast
-prod-qwen-quality: ; $(PROD) --profile qwen-quality --profile webui up -d
-	$(call wait-healthy,vllm-quality)
+prod-qwen-quality:
+	@$(MAKE) prod-up
+	@$(MAKE) prod-bootstrap-models
 	@$(MAKE) prod-switch MODEL=qwen-quality
-prod-deepseek:     ; $(PROD) --profile deepseek --profile webui up -d
-	$(call wait-healthy,vllm-deepseek)
+prod-deepseek:
+	@$(MAKE) prod-up
+	@$(MAKE) prod-bootstrap-models
 	@$(MAKE) prod-switch MODEL=deepseek
-prod-qwen-max:     ; $(PROD) --profile qwen-max --profile webui up -d
-	$(call wait-healthy,vllm-qwen32b)
+prod-qwen-max:
+	@$(MAKE) prod-up
+	@$(MAKE) prod-bootstrap-models
 	@$(MAKE) prod-switch MODEL=qwen-max
 prod-down:         ; $(PROD) --profile qwen-fast --profile qwen-quality --profile deepseek --profile qwen-max --profile webui down
 prod-ps:           ; $(PROD) ps
@@ -98,6 +86,6 @@ vpn-status: ; sudo wg show
 ssh:       ; ssh somia
 
 .PHONY: local-up local-web local-down local-ps local-logs local-pull local-init \
-        prod-bootstrap-models prod-build-switcher prod-qwen-fast prod-qwen-quality prod-deepseek prod-qwen-max prod-down prod-ps prod-logs prod-pull prod-restart \
+        prod-bootstrap-models prod-build-switcher prod-up prod-qwen-fast prod-qwen-quality prod-deepseek prod-qwen-max prod-down prod-ps prod-logs prod-pull prod-restart \
         prod-switch prod-status prod-list-models prod-stop-models \
         models test-qwen-fast test-qwen-quality test-deepseek test-qwen-max vpn-up vpn-down vpn-status ssh
