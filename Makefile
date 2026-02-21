@@ -43,6 +43,7 @@ define wait-healthy
 endef
 
 prod-bootstrap-models: ; $(PROD) $(PROD_MODEL_PROFILES) create vllm-fast vllm-quality vllm-deepseek vllm-qwen32b
+prod-build-switcher:  ; $(PROD) --profile webui build model-switcher
 prod-qwen-fast:    ; $(PROD) --profile qwen-fast --profile webui up -d
 	$(call wait-healthy,vllm-fast)
 	@$(MAKE) prod-switch MODEL=qwen-fast
@@ -97,6 +98,6 @@ vpn-status: ; sudo wg show
 ssh:       ; ssh somia
 
 .PHONY: local-up local-web local-down local-ps local-logs local-pull local-init \
-        prod-bootstrap-models prod-qwen-fast prod-qwen-quality prod-deepseek prod-qwen-max prod-down prod-ps prod-logs prod-pull prod-restart \
+        prod-bootstrap-models prod-build-switcher prod-qwen-fast prod-qwen-quality prod-deepseek prod-qwen-max prod-down prod-ps prod-logs prod-pull prod-restart \
         prod-switch prod-status prod-list-models prod-stop-models \
         models test-qwen-fast test-qwen-quality test-deepseek test-qwen-max vpn-up vpn-down vpn-status ssh
