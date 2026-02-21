@@ -5,6 +5,9 @@
 # --- Local (Mac) ---
 LOCAL=docker compose -f docker-compose.yml -f docker-compose.local.yml
 KEY ?= cambiaLAclave
+SWITCHER_TOKEN ?= $(MODEL_SWITCHER_TOKEN)
+SWITCHER_TOKEN := $(or $(SWITCHER_TOKEN),change_me)
+SWITCHER_URL ?= http://127.0.0.1:9000
 
 local-up:      ; $(LOCAL) up -d
 local-web:     ; $(LOCAL) --profile webui up -d
@@ -18,6 +21,7 @@ local-init:    ; docker exec ollama ollama pull qwen2.5:7b
 
 # --- Producción (servidor con GPU) ---
 PROD=cd /opt/ai/compose && docker compose -f docker-compose.yml -f docker-compose.prod.yml
+PROD_MODEL_PROFILES=--profile qwen-fast --profile qwen-quality --profile deepseek --profile qwen-max
 
 WAIT_TIMEOUT ?= 300
 
@@ -38,19 +42,28 @@ define wait-healthy
 	exit 1
 endef
 
-prod-qwen-fast:    ; ln -sf /opt/ai/compose/litellm-config.qwen-fast.yml /opt/ai/compose/litellm-active.yml && $(PROD) --profile qwen-fast --profile webui up -d
+prod-bootstrap-models: ; $(PROD) $(PROD_MODEL_PROFILES) create vllm-fast vllm-quality vllm-deepseek vllm-qwen32b
+prod-qwen-fast:    ; $(PROD) --profile qwen-fast --profile webui up -d
 	$(call wait-healthy,vllm-fast)
-prod-qwen-quality: ; ln -sf /opt/ai/compose/litellm-config.qwen-quality.yml /opt/ai/compose/litellm-active.yml && $(PROD) --profile qwen-quality --profile webui up -d
+	@$(MAKE) prod-switch MODEL=qwen-fast
+prod-qwen-quality: ; $(PROD) --profile qwen-quality --profile webui up -d
 	$(call wait-healthy,vllm-quality)
-prod-deepseek:     ; ln -sf /opt/ai/compose/litellm-config.deepseek.yml /opt/ai/compose/litellm-active.yml && $(PROD) --profile deepseek --profile webui up -d
+	@$(MAKE) prod-switch MODEL=qwen-quality
+prod-deepseek:     ; $(PROD) --profile deepseek --profile webui up -d
 	$(call wait-healthy,vllm-deepseek)
-prod-qwen-max:     ; ln -sf /opt/ai/compose/litellm-config.qwen-max.yml /opt/ai/compose/litellm-active.yml && $(PROD) --profile qwen-max --profile webui up -d
+	@$(MAKE) prod-switch MODEL=deepseek
+prod-qwen-max:     ; $(PROD) --profile qwen-max --profile webui up -d
 	$(call wait-healthy,vllm-qwen32b)
+	@$(MAKE) prod-switch MODEL=qwen-max
 prod-down:         ; $(PROD) --profile qwen-fast --profile qwen-quality --profile deepseek --profile qwen-max --profile webui down
 prod-ps:           ; $(PROD) ps
 prod-logs:         ; $(PROD) logs -f --tail=200
 prod-pull:         ; $(PROD) --profile qwen-fast --profile qwen-quality --profile deepseek --profile qwen-max --profile webui pull
 prod-restart:      ; $(PROD) restart
+prod-switch:       ; curl -s $(SWITCHER_URL)/switch -H "Authorization: Bearer $(SWITCHER_TOKEN)" -H "Content-Type: application/json" -d '{"model":"$(MODEL)"}' | jq
+prod-status:       ; curl -s $(SWITCHER_URL)/status -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
+prod-list-models:  ; curl -s $(SWITCHER_URL)/models -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
+prod-stop-models:  ; curl -s $(SWITCHER_URL)/stop -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
 
 # --- Smoke tests (funcionan en ambos entornos) ---
 models:             ; curl -s http://127.0.0.1:4000/v1/models -H "Authorization: Bearer $(KEY)" | jq
@@ -84,5 +97,6 @@ vpn-status: ; sudo wg show
 ssh:       ; ssh somia
 
 .PHONY: local-up local-web local-down local-ps local-logs local-pull local-init \
-        prod-qwen-fast prod-qwen-quality prod-deepseek prod-qwen-max prod-down prod-ps prod-logs prod-pull prod-restart \
+        prod-bootstrap-models prod-qwen-fast prod-qwen-quality prod-deepseek prod-qwen-max prod-down prod-ps prod-logs prod-pull prod-restart \
+        prod-switch prod-status prod-list-models prod-stop-models \
         models test-qwen-fast test-qwen-quality test-deepseek test-qwen-max vpn-up vpn-down vpn-status ssh
