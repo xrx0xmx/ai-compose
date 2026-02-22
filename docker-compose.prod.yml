@@ -203,7 +203,7 @@ services:
 
   # ComfyUI (imagen) — activación bajo demanda para no competir con LLM
   comfyui:
-    image: ${COMFYUI_IMAGE:-yanwk/comfyui-boot:latest}
+    image: ${COMFYUI_IMAGE:-yanwk/comfyui-boot:cu126-slim}
     container_name: comfyui
     runtime: nvidia
     ports:

@@ -28,7 +28,7 @@ Directorios en el servidor (propiedad de aiservices:aiservices):
 - `/opt/ai/comfyui-data/`    — datos persistentes de ComfyUI
 
 Imagen de ComfyUI (override opcional):
-- default: `yanwk/comfyui-boot:latest`
+- default: `yanwk/comfyui-boot:cu126-slim`
 - override en `.env`: `COMFYUI_IMAGE=<tu_imagen>`
 
 ### Inicialización recomendada (una vez)
