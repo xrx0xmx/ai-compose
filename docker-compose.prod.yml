@@ -24,6 +24,7 @@ services:
       - CONTAINERS=1
       - POST=1
       - GET=1
+      - LOGS=1
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
@@ -206,7 +207,6 @@ services:
     image: ${COMFYUI_IMAGE:-yanwk/comfyui-boot:cu126-slim}
     container_name: comfyui
     runtime: nvidia
-    gpus: all
     ports:
       - "127.0.0.1:8188:8188"
     environment:
@@ -229,6 +229,38 @@ services:
   open-webui:
     volumes:
       - /opt/ai/openwebui-data:/app/backend/data
+
+  admin-panel:
+    build:
+      context: .
+      dockerfile: admin/Dockerfile
+    container_name: admin-panel
+    environment:
+      - ADMIN_JWT_SECRET=${ADMIN_JWT_SECRET:-change-this-jwt-secret}
+      - MODEL_SWITCHER_URL=http://model-switcher:9000
+      - MODEL_SWITCHER_TOKEN=${MODEL_SWITCHER_TOKEN:-change_me}
+      - DOCKER_PROXY_URL=http://docker-socket-proxy:2375
+      - WEBUI_DB_PATH=/webui-data/webui.db
+    volumes:
+      - /opt/ai/openwebui-data:/webui-data:ro
+    networks:
+      - default
+      - switcher-net
+    ports:
+      - "80:8080"
+    depends_on:
+      model-switcher:
+        condition: service_healthy
+      docker-socket-proxy:
+        condition: service_started
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
 
 networks:
   switcher-net:
