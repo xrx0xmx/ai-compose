@@ -217,6 +217,7 @@ services:
     volumes:
       - /opt/ai/comfyui-data:/root/ComfyUI
       - /opt/ai/hf-cache:/data/hf-cache
+      - ./comfyui/manager-config.ini:/root/ComfyUI/custom_nodes/ComfyUI-Manager/config.ini:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8188/system_stats || exit 1"]
       interval: 30s
