@@ -31,6 +31,10 @@ Imagen de ComfyUI (override opcional):
 - default: `yanwk/comfyui-boot:cu126-slim`
 - override en `.env`: `COMFYUI_IMAGE=<tu_imagen>`
 
+Passthrough GPU para ComfyUI (producción):
+- `comfyui` usa `runtime: nvidia` + `gpus: all`
+- variables NVIDIA explícitas: `NVIDIA_VISIBLE_DEVICES=all` y `NVIDIA_DRIVER_CAPABILITIES=compute,utility`
+
 ### Inicialización recomendada (una vez)
 
 ```bash
@@ -48,6 +52,60 @@ make prod-init
 ```
 
 Esto levanta servicios base y crea contenedores de modelos/comfy.
+
+Si cambias `docker-compose.prod.yml` (imagen/env/runtime GPU), recrea contenedores:
+
+```bash
+make prod-down
+make prod-init
+```
+
+### Preflight GPU antes de activar ComfyUI
+
+```bash
+make prod-gpu-preflight
+MODEL_SWITCHER_TOKEN=tu_token_seguro COMFY_TTL=45 make prod-comfy-on-safe
+```
+
+`prod-comfy-on-safe` ejecuta primero el preflight (host + Docker) y solo si pasa activa modo `comfy`.
+
+### Troubleshooting: `Found no NVIDIA driver on your system`
+
+Si en `make prod-logs SERVICE=comfyui TAIL=120` aparece este error:
+
+```text
+RuntimeError: Found no NVIDIA driver on your system
+```
+
+Valida en este orden:
+
+1. Host (fuera de Docker):
+```bash
+lspci | grep -Ei 'nvidia|vga|3d'
+nvidia-smi
+lsmod | grep nvidia
+```
+
+2. Runtime NVIDIA en Docker:
+```bash
+docker info | grep -E 'Runtimes|Default Runtime'
+docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 nvidia-smi
+```
+
+3. Si Docker no ve GPU dentro del contenedor:
+```bash
+sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 nvidia-smi
+```
+
+4. Reintenta ComfyUI desde el flujo soportado:
+```bash
+MODEL_SWITCHER_TOKEN=tu_token_seguro COMFY_TTL=45 make prod-comfy-on-safe
+make prod-logs SERVICE=comfyui TAIL=120
+make prod-test
+```
 
 ### Modo de carga (exclusión estricta GPU)
 

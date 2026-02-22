@@ -30,8 +30,10 @@ help:
 	@echo "Control de modo/modelo:"
 	@echo "  make prod-switch MODEL=qwen-fast|qwen-quality|deepseek|qwen-max"
 	@echo "  make prod-comfy-on COMFY_TTL=45"
+	@echo "  make prod-comfy-on-safe COMFY_TTL=45"
 	@echo "  make prod-comfy-off MODEL=qwen-fast"
 	@echo "  make prod-llm-priority"
+	@echo "  make prod-gpu-preflight        # valida driver NVIDIA y runtime Docker"
 	@echo "  make prod-status | make prod-mode-status"
 	@echo "  make prod-test                 # prueba unica; decide llamada segun modo activo"
 	@echo "  make prod-admin-url            # URL del panel /admin de model-switcher"
@@ -66,6 +68,38 @@ prod-stop-models:  ; curl -s $(SWITCHER_URL)/stop -H "Authorization: Bearer $(SW
 prod-comfy-on:     ; curl -s $(SWITCHER_URL)/mode/switch -H "Authorization: Bearer $(SWITCHER_TOKEN)" -H "Content-Type: application/json" -d '{"mode":"comfy","ttl_minutes":$(COMFY_TTL)}' | jq
 prod-comfy-off:    ; curl -s $(SWITCHER_URL)/mode/switch -H "Authorization: Bearer $(SWITCHER_TOKEN)" -H "Content-Type: application/json" -d '{"mode":"llm","model":"$(MODEL)"}' | jq
 prod-llm-priority: ; curl -s $(SWITCHER_URL)/mode/release -H "Authorization: Bearer $(SWITCHER_TOKEN)" -H "Content-Type: application/json" -d '{}' | jq
+
+# --- Preflight GPU para ComfyUI ---
+prod-gpu-preflight:
+	@echo "[preflight] Verificando GPU NVIDIA en host..."
+	@command -v nvidia-smi >/dev/null 2>&1 || { \
+	  echo "ERROR: nvidia-smi no encontrado en host."; \
+	  echo "Accion: instala/corrige driver NVIDIA y reinicia."; \
+	  echo "Ejemplo Debian: sudo apt update && sudo apt install -y nvidia-driver firmware-misc-nonfree && sudo reboot"; \
+	  exit 1; \
+	}
+	@nvidia-smi >/dev/null 2>&1 || { \
+	  echo "ERROR: nvidia-smi no puede acceder al driver NVIDIA."; \
+	  echo "Accion: valida driver/kernel y vuelve a probar nvidia-smi."; \
+	  exit 1; \
+	}
+	@echo "[ok] Driver NVIDIA disponible en host."
+	@echo "[preflight] Verificando runtime NVIDIA en Docker..."
+	@docker info 2>/dev/null | grep -E "Runtimes|Default Runtime" || true
+	@docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 nvidia-smi >/dev/null 2>&1 || { \
+	  echo "ERROR: Docker no expone GPU NVIDIA dentro de contenedores."; \
+	  echo "Accion: instala toolkit y configura runtime Docker."; \
+	  echo "Comandos: sudo apt-get install -y nvidia-container-toolkit"; \
+	  echo "          sudo nvidia-ctk runtime configure --runtime=docker"; \
+	  echo "          sudo systemctl restart docker"; \
+	  exit 1; \
+	}
+	@echo "[ok] Runtime NVIDIA en Docker operativo."
+	@echo "[ok] Preflight GPU completado."
+
+prod-comfy-on-safe:
+	@$(MAKE) prod-gpu-preflight
+	@$(MAKE) prod-comfy-on COMFY_TTL=$(COMFY_TTL)
 
 # --- Test unico (autodetecta modo) ---
 prod-test:
@@ -127,5 +161,5 @@ prod-logs-%:
 
 .PHONY: help \
         prod-init prod-up prod-build-switcher prod-bootstrap-models prod-down prod-ps prod-pull prod-restart \
-        prod-switch prod-switch-async prod-status prod-mode-status prod-admin-url prod-list-models prod-stop-models prod-comfy-on prod-comfy-off prod-llm-priority prod-test \
+        prod-switch prod-switch-async prod-status prod-mode-status prod-admin-url prod-list-models prod-stop-models prod-comfy-on prod-comfy-off prod-comfy-on-safe prod-llm-priority prod-gpu-preflight prod-test \
         prod-logs-list prod-logs-all prod-logs prod-logs-%
