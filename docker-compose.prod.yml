@@ -203,7 +203,7 @@ services:
 
   # ComfyUI (imagen) — activación bajo demanda para no competir con LLM
   comfyui:
-    image: ghcr.io/comfyanonymous/comfyui:latest
+    image: ${COMFYUI_IMAGE:-yanwk/comfyui-boot:latest}
     container_name: comfyui
     runtime: nvidia
     ports:

@@ -34,6 +34,7 @@ help:
 	@echo "  make prod-llm-priority"
 	@echo "  make prod-status | make prod-mode-status"
 	@echo "  make prod-test                 # prueba unica; decide llamada segun modo activo"
+	@echo "  make prod-admin-url            # URL del panel /admin de model-switcher"
 	@echo ""
 	@echo "Logs:"
 	@echo "  make prod-logs-all TAIL=200"
@@ -59,6 +60,7 @@ prod-switch:       ; curl -s $(SWITCHER_URL)/switch -H "Authorization: Bearer $(
 prod-switch-async: ; curl -s $(SWITCHER_URL)/switch -H "Authorization: Bearer $(SWITCHER_TOKEN)" -H "Content-Type: application/json" -d '{"model":"$(MODEL)","wait_for_ready":false}' | jq
 prod-status:       ; curl -s $(SWITCHER_URL)/status -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
 prod-mode-status:  ; curl -s $(SWITCHER_URL)/mode -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
+prod-admin-url:    ; @echo "$(SWITCHER_URL)/admin"
 prod-list-models:  ; curl -s $(SWITCHER_URL)/models -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
 prod-stop-models:  ; curl -s $(SWITCHER_URL)/stop -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
 prod-comfy-on:     ; curl -s $(SWITCHER_URL)/mode/switch -H "Authorization: Bearer $(SWITCHER_TOKEN)" -H "Content-Type: application/json" -d '{"mode":"comfy","ttl_minutes":$(COMFY_TTL)}' | jq
@@ -117,5 +119,5 @@ prod-logs-%:
 
 .PHONY: help \
         prod-init prod-up prod-build-switcher prod-bootstrap-models prod-down prod-ps prod-pull prod-restart \
-        prod-switch prod-switch-async prod-status prod-mode-status prod-list-models prod-stop-models prod-comfy-on prod-comfy-off prod-llm-priority prod-test \
+        prod-switch prod-switch-async prod-status prod-mode-status prod-admin-url prod-list-models prod-stop-models prod-comfy-on prod-comfy-off prod-llm-priority prod-test \
         prod-logs-list prod-logs-all prod-logs prod-logs-%

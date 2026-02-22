@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 TOKEN = os.getenv("MODEL_SWITCHER_TOKEN", "")
@@ -1657,6 +1657,236 @@ def startup_init_mode() -> None:
 @app.get("/health")
 def health() -> Dict[str, str]:
   return {"status": "ok"}
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin() -> HTMLResponse:
+  return HTMLResponse(
+    content="""<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Model Switcher Admin</title>
+  <style>
+    :root {
+      --bg: #10151e;
+      --panel: #171f2d;
+      --panel-alt: #1f293b;
+      --text: #edf2f7;
+      --muted: #94a3b8;
+      --ok: #16a34a;
+      --warn: #eab308;
+      --danger: #dc2626;
+      --accent: #0ea5e9;
+      --border: #334155;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: linear-gradient(160deg, var(--bg), #0b111a);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 24px;
+    }
+    .layout {
+      max-width: 980px;
+      margin: 0 auto;
+      display: grid;
+      gap: 16px;
+    }
+    .card {
+      background: linear-gradient(180deg, var(--panel), var(--panel-alt));
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 20px;
+    }
+    .hint {
+      color: var(--muted);
+      margin: 0;
+      font-size: 14px;
+    }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+      align-items: center;
+    }
+    input, select, button {
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0f172a;
+      color: var(--text);
+      padding: 9px 10px;
+      font-size: 14px;
+    }
+    input, select { min-width: 160px; }
+    button {
+      cursor: pointer;
+      background: #0f172a;
+    }
+    button.primary { border-color: var(--accent); }
+    button.warn { border-color: var(--warn); }
+    button.danger { border-color: var(--danger); }
+    pre {
+      background: #0b1220;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 12px;
+      overflow: auto;
+      white-space: pre-wrap;
+      margin: 0;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+      background: var(--warn);
+    }
+    .dot.ok { background: var(--ok); }
+    .dot.danger { background: var(--danger); }
+  </style>
+</head>
+<body>
+  <main class="layout">
+    <section class="card">
+      <h1>Model Switcher Admin</h1>
+      <p class="hint">Canal de control always-on para cambiar entre modo LLM y ComfyUI.</p>
+      <div class="row">
+        <label for="token">Bearer token:</label>
+        <input id="token" type="password" placeholder="MODEL_SWITCHER_TOKEN">
+        <button id="saveToken">Guardar token</button>
+        <span class="badge"><span id="statusDot" class="dot"></span><span id="statusText">sin estado</span></span>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="row">
+        <button id="refresh">Refrescar estado</button>
+        <button id="modeComfy" class="warn">Activar Comfy (45m)</button>
+        <select id="llmModel">
+          <option value="qwen-fast">qwen-fast</option>
+          <option value="qwen-quality">qwen-quality</option>
+          <option value="deepseek">deepseek</option>
+          <option value="qwen-max">qwen-max</option>
+        </select>
+        <button id="modeLlm" class="primary">Volver a LLM</button>
+        <button id="release" class="danger">Preemption LLM</button>
+      </div>
+      <p class="hint">`Preemption LLM` fuerza la salida de comfy y restaura el modo llm por prioridad operativa.</p>
+    </section>
+
+    <section class="card">
+      <pre id="output">Cargando...</pre>
+    </section>
+  </main>
+
+  <script>
+    const tokenInput = document.getElementById("token");
+    const outputEl = document.getElementById("output");
+    const statusText = document.getElementById("statusText");
+    const statusDot = document.getElementById("statusDot");
+
+    const LS_KEY = "model_switcher_token";
+    tokenInput.value = window.localStorage.getItem(LS_KEY) || "";
+
+    function setStatus(mode, healthy) {
+      statusText.textContent = mode ? `modo=${mode}` : "sin estado";
+      statusDot.className = "dot";
+      if (healthy === true) statusDot.classList.add("ok");
+      if (healthy === false) statusDot.classList.add("danger");
+    }
+
+    function getHeaders() {
+      const token = tokenInput.value.trim();
+      if (!token) throw new Error("Token requerido");
+      return {
+        "Authorization": `Bearer ${token}`,
+        "Content-Type": "application/json",
+      };
+    }
+
+    async function api(method, path, body) {
+      const headers = getHeaders();
+      const response = await fetch(path, {
+        method,
+        headers,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const text = await response.text();
+      let data = {};
+      try { data = text ? JSON.parse(text) : {}; } catch (_) { data = { raw: text }; }
+      if (!response.ok) {
+        throw new Error(`${response.status} ${response.statusText}\\n${JSON.stringify(data, null, 2)}`);
+      }
+      return data;
+    }
+
+    async function refresh() {
+      try {
+        const modePayload = await api("GET", "/mode");
+        const activeMode = modePayload?.mode?.active || "unknown";
+        const healthy = modePayload?.switch_in_progress ? null : true;
+        setStatus(activeMode, healthy);
+        outputEl.textContent = JSON.stringify(modePayload, null, 2);
+      } catch (err) {
+        setStatus(null, false);
+        outputEl.textContent = String(err);
+      }
+    }
+
+    async function switchComfy() {
+      const payload = await api("POST", "/mode/switch", { mode: "comfy", ttl_minutes: 45, wait_for_ready: true });
+      outputEl.textContent = JSON.stringify(payload, null, 2);
+      await refresh();
+    }
+
+    async function switchLlm() {
+      const model = document.getElementById("llmModel").value;
+      const payload = await api("POST", "/mode/switch", { mode: "llm", model, wait_for_ready: true });
+      outputEl.textContent = JSON.stringify(payload, null, 2);
+      await refresh();
+    }
+
+    async function releaseLlm() {
+      const payload = await api("POST", "/mode/release", {});
+      outputEl.textContent = JSON.stringify(payload, null, 2);
+      await refresh();
+    }
+
+    document.getElementById("saveToken").addEventListener("click", () => {
+      window.localStorage.setItem(LS_KEY, tokenInput.value.trim());
+      refresh();
+    });
+    document.getElementById("refresh").addEventListener("click", () => refresh());
+    document.getElementById("modeComfy").addEventListener("click", () => switchComfy().catch((e) => { outputEl.textContent = String(e); }));
+    document.getElementById("modeLlm").addEventListener("click", () => switchLlm().catch((e) => { outputEl.textContent = String(e); }));
+    document.getElementById("release").addEventListener("click", () => releaseLlm().catch((e) => { outputEl.textContent = String(e); }));
+
+    refresh();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>"""
+  )
 
 
 @app.get("/healthz/ready")

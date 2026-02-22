@@ -27,6 +27,10 @@ Directorios en el servidor (propiedad de aiservices:aiservices):
 - `/opt/ai/openwebui-data/`  — datos de Open WebUI
 - `/opt/ai/comfyui-data/`    — datos persistentes de ComfyUI
 
+Imagen de ComfyUI (override opcional):
+- default: `yanwk/comfyui-boot:latest`
+- override en `.env`: `COMFYUI_IMAGE=<tu_imagen>`
+
 ### Inicialización recomendada (una vez)
 
 ```bash
@@ -65,6 +69,7 @@ MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-llm-priority
 ## Model switcher (control desde Open WebUI)
 
 Permite cambiar modelo desde un Tool OpenAPI en Open WebUI.
+Tambien expone UI minima de administracion en `GET /admin`.
 
 ### 1) Configurar token y defaults (host)
 
@@ -95,12 +100,14 @@ MODEL_SWITCHER_TOKEN=tu_token_seguro MODEL=qwen-fast make prod-switch
 MODEL_SWITCHER_TOKEN=tu_token_seguro MODEL=qwen-fast make prod-switch-async
 MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-status
 MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-mode-status
+make prod-admin-url
 ```
 
 ## Endpoints del switcher
 
 - `GET /health`
 - `GET /healthz/ready` (solo `ready` cuando el modo activo es `llm`)
+- `GET /admin` (UI minima para operaciones de modo)
 - `GET /models`
 - `GET /status`
 - `GET /mode`
@@ -125,6 +132,31 @@ MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-mode-status
 ## Publicación de ComfyUI (Nginx host)
 
 ComfyUI se expone solo en loopback (`127.0.0.1:8188`). Publica `/comfy/` desde Nginx del host hacia ese puerto y protege con autenticación + rate limit + timeouts altos.
+
+Para canal de control directo, publica tambien `http://127.0.0.1:9000/admin` detras de Nginx con auth (Basic/Auth proxy o VPN).  
+La UI `/admin` pide token `MODEL_SWITCHER_TOKEN` y usa:
+- `POST /mode/switch` para `llm|comfy`
+- `POST /mode/release` para preemption inmediata a LLM
+
+## Runbook de recuperación rápida
+
+Caso: sistema en `comfy` y chat LLM no disponible.
+
+1. Verifica modo:
+```bash
+MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-mode-status
+```
+
+2. Recupera prioridad LLM (forzado):
+```bash
+MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-llm-priority
+```
+
+3. Confirma estado:
+```bash
+MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-mode-status
+MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-test
+```
 
 ## Test único de salud
 
