@@ -69,7 +69,13 @@ def verify_webui_credentials(email: str, password: str) -> Optional[dict]:
         conn = sqlite3.connect(WEBUI_DB_PATH, timeout=5)
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
-        cur.execute("SELECT id, name, email, password, role FROM user WHERE email = ?", (email,))
+        # Open WebUI stores password in the `auth` table, not in `user`
+        cur.execute("""
+            SELECT u.id, u.name, u.email, u.role, a.password
+            FROM user u
+            JOIN auth a ON a.id = u.id
+            WHERE u.email = ?
+        """, (email,))
         row = cur.fetchone()
         conn.close()
     except Exception as e:
