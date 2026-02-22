@@ -29,6 +29,7 @@ JWT_EXPIRE_HOURS = 8
 SWITCHER_URL = os.environ.get("MODEL_SWITCHER_URL", "http://model-switcher:9000")
 SWITCHER_TOKEN = os.environ.get("MODEL_SWITCHER_TOKEN", "change_me")
 DOCKER_PROXY_URL = os.environ.get("DOCKER_PROXY_URL", "http://docker-socket-proxy:2375")
+COMFYUI_INTERNAL_URL = os.environ.get("COMFYUI_INTERNAL_URL", "http://comfyui:8188")
 
 ALLOWED_CONTAINERS = [
     "comfyui",
@@ -157,11 +158,19 @@ def switcher_post(path: str, body: dict, timeout: int = 120) -> dict:
 # ---------------------------------------------------------------------------
 
 @app.post("/auth/login")
-def login(req: LoginRequest):
+def login(req: LoginRequest, response: Response):
     user = verify_webui_credentials(req.email, req.password)
     if user is None:
         raise HTTPException(status_code=401, detail="Credenciales inválidas o usuario sin permisos de admin")
     token = create_jwt(user)
+    # Set cookie so the ComfyUI proxy can validate auth on browser navigation
+    response.set_cookie(
+        key="admin_jwt",
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=JWT_EXPIRE_HOURS * 3600,
+    )
     return {"token": token, "name": user["name"], "email": user["email"]}
 
 
@@ -220,6 +229,73 @@ def api_mode_release(user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# ComfyUI reverse proxy (requires JWT cookie or header)
+# ---------------------------------------------------------------------------
+
+@app.get("/comfy")
+def comfy_redirect():
+    return RedirectResponse(url="/comfy/")
+
+
+@app.api_route("/comfy/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
+async def comfy_proxy(path: str, request: Request):
+    """Reverse proxy to ComfyUI. Auth via JWT cookie or Authorization header."""
+    # Check auth — accept JWT from cookie or header
+    token = None
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+    else:
+        token = request.cookies.get("admin_jwt")
+
+    if not token or decode_jwt(token) is None:
+        return RedirectResponse(url="/admin")
+
+    # Forward request to ComfyUI
+    target_url = f"{COMFYUI_INTERNAL_URL}/{path}"
+    params = dict(request.query_params)
+    body = await request.body()
+    headers = {
+        k: v for k, v in request.headers.items()
+        if k.lower() not in ("host", "authorization", "content-length")
+    }
+
+    try:
+        resp = requests.request(
+            method=request.method,
+            url=target_url,
+            params=params,
+            data=body,
+            headers=headers,
+            timeout=30,
+            allow_redirects=False,
+            stream=True,
+        )
+    except requests.exceptions.ConnectionError:
+        return HTMLResponse(
+            content="<h2>ComfyUI no está activo.</h2><p><a href='/admin'>Volver al panel</a></p>",
+            status_code=502,
+        )
+
+    # Stream response back
+    excluded = {"transfer-encoding", "connection", "content-encoding"}
+    resp_headers = {k: v for k, v in resp.headers.items() if k.lower() not in excluded}
+
+    # Rewrite Location headers for redirects
+    if "location" in resp_headers:
+        loc = resp_headers["location"]
+        if loc.startswith("/"):
+            resp_headers["location"] = "/comfy" + loc
+
+    return Response(
+        content=resp.content,
+        status_code=resp.status_code,
+        headers=resp_headers,
+        media_type=resp.headers.get("content-type"),
+    )
 
 
 @app.get("/api/logs/{container_name}")
@@ -856,9 +932,8 @@ function renderComfySection(d) {
   if (mode === 'comfy' && comfyRunning) {
     chipEl.innerHTML = '<span class="status-chip chip-comfy">● Activo</span>';
     linkRow.style.display = 'block';
-    const comfyUrl = 'http://' + serverHost + ':8188';
-    document.getElementById('comfy-link').href = comfyUrl;
-    document.getElementById('comfy-link').textContent = '🔗 Abrir ComfyUI — ' + comfyUrl;
+    document.getElementById('comfy-link').href = '/comfy/';
+    document.getElementById('comfy-link').textContent = '🔗 Abrir ComfyUI (vía proxy)';
     if (lease?.expires_at) {
       document.getElementById('comfy-expires').textContent =
         new Date(lease.expires_at).toLocaleTimeString();
