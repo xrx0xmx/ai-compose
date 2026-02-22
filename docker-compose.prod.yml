@@ -208,7 +208,7 @@ services:
     container_name: comfyui
     runtime: nvidia
     ports:
-      - "127.0.0.1:8188:8188"
+      - "8188:8188"
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
@@ -240,7 +240,6 @@ services:
       - MODEL_SWITCHER_TOKEN=${MODEL_SWITCHER_TOKEN:-change_me}
       - DOCKER_PROXY_URL=http://docker-socket-proxy:2375
       - WEBUI_DB_PATH=/webui-data/webui.db
-      - COMFYUI_INTERNAL_URL=http://comfyui:8188
     volumes:
       - /opt/ai/openwebui-data:/webui-data:ro
     networks:

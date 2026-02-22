@@ -10,13 +10,10 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-import asyncio
 import bcrypt
-import httpx
 import jwt
 import requests
-import websockets
-from fastapi import FastAPI, HTTPException, Depends, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Depends, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse, RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
@@ -232,125 +229,6 @@ def api_mode_release(user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
-
-
-# ---------------------------------------------------------------------------
-# ComfyUI reverse proxy (JWT cookie or header)
-# ---------------------------------------------------------------------------
-
-def _comfy_token(request: Request) -> Optional[str]:
-    """Extract JWT from Authorization header or cookie."""
-    auth = request.headers.get("Authorization", "")
-    if auth.startswith("Bearer "):
-        return auth[7:]
-    return request.cookies.get("admin_jwt")
-
-
-COMFY_EXCLUDED_REQ_HEADERS = {"host", "authorization", "content-length",
-                               "transfer-encoding", "connection", "upgrade"}
-COMFY_EXCLUDED_RESP_HEADERS = {"transfer-encoding", "connection", "content-encoding"}
-
-
-@app.get("/comfy")
-def comfy_redirect():
-    return RedirectResponse(url="/comfy/")
-
-
-# WebSocket proxy for ComfyUI real-time updates
-@app.websocket("/comfy/ws")
-async def comfy_ws(websocket: WebSocket):
-    token = _comfy_token(websocket)
-    if not token or decode_jwt(token) is None:
-        await websocket.close(code=4401)
-        return
-
-    await websocket.accept()
-    comfy_ws_url = COMFYUI_INTERNAL_URL.replace("http://", "ws://").replace("https://", "wss://") + "/ws"
-    # Pass through query params (clientId etc.)
-    qs = str(websocket.url.query)
-    if qs:
-        comfy_ws_url += "?" + qs
-
-    try:
-        async with websockets.connect(comfy_ws_url) as comfy_conn:
-            async def client_to_comfy():
-                try:
-                    while True:
-                        data = await websocket.receive_bytes()
-                        await comfy_conn.send(data)
-                except Exception:
-                    pass
-
-            async def comfy_to_client():
-                try:
-                    async for message in comfy_conn:
-                        if isinstance(message, bytes):
-                            await websocket.send_bytes(message)
-                        else:
-                            await websocket.send_text(message)
-                except Exception:
-                    pass
-
-            await asyncio.gather(client_to_comfy(), comfy_to_client())
-    except Exception as e:
-        logger.warning("ComfyUI WS proxy error: %s", e)
-    finally:
-        try:
-            await websocket.close()
-        except Exception:
-            pass
-
-
-# HTTP proxy for all other ComfyUI paths
-@app.api_route("/comfy/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"])
-async def comfy_proxy(path: str, request: Request):
-    token = _comfy_token(request)
-    if not token or decode_jwt(token) is None:
-        # For XHR/fetch return 401, for browser navigation redirect to login
-        accept = request.headers.get("accept", "")
-        if "text/html" in accept:
-            return RedirectResponse(url="/admin")
-        raise HTTPException(status_code=401, detail="Autenticación requerida")
-
-    target_url = f"{COMFYUI_INTERNAL_URL}/{path}"
-    params = dict(request.query_params)
-    body = await request.body()
-    fwd_headers = {
-        k: v for k, v in request.headers.items()
-        if k.lower() not in COMFY_EXCLUDED_REQ_HEADERS
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=False) as client:
-            resp = await client.request(
-                method=request.method,
-                url=target_url,
-                params=params,
-                content=body,
-                headers=fwd_headers,
-            )
-    except httpx.ConnectError:
-        return HTMLResponse(
-            content="<h2 style='font-family:sans-serif;color:#f85149'>ComfyUI no está activo.</h2>"
-                    "<p><a href='/admin'>← Volver al panel</a></p>",
-            status_code=502,
-        )
-
-    resp_headers = {k: v for k, v in resp.headers.items()
-                    if k.lower() not in COMFY_EXCLUDED_RESP_HEADERS}
-
-    # Rewrite absolute redirects to stay under /comfy/
-    if "location" in resp_headers:
-        loc = resp_headers["location"]
-        if loc.startswith("/") and not loc.startswith("/comfy"):
-            resp_headers["location"] = "/comfy" + loc
-
-    return Response(
-        content=resp.content,
-        status_code=resp.status_code,
-        headers=resp_headers,
-        media_type=resp.headers.get("content-type"),
-    )
 
 
 @app.get("/api/logs/{container_name}")
@@ -987,8 +865,9 @@ function renderComfySection(d) {
   if (mode === 'comfy' && comfyRunning) {
     chipEl.innerHTML = '<span class="status-chip chip-comfy">● Activo</span>';
     linkRow.style.display = 'block';
-    document.getElementById('comfy-link').href = '/comfy/';
-    document.getElementById('comfy-link').textContent = '🔗 Abrir ComfyUI (vía proxy)';
+    const comfyUrl = 'http://' + serverHost + ':8188';
+    document.getElementById('comfy-link').href = comfyUrl;
+    document.getElementById('comfy-link').textContent = '🔗 Abrir ComfyUI → ' + comfyUrl;
     if (lease?.expires_at) {
       document.getElementById('comfy-expires').textContent =
         new Date(lease.expires_at).toLocaleTimeString();
