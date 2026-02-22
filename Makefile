@@ -71,17 +71,25 @@ prod-llm-priority: ; curl -s $(SWITCHER_URL)/mode/release -H "Authorization: Bea
 prod-test:
 	@MODE=$$(curl -sf $(SWITCHER_URL)/mode -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq -r '.mode.active'); \
 	if [ "$$MODE" = "llm" ]; then \
-	  MODEL_ACTIVE=$$(curl -sf $(SWITCHER_URL)/status -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq -r '.active_model'); \
+	  STATUS_JSON=$$(curl -sf $(SWITCHER_URL)/status -H "Authorization: Bearer $(SWITCHER_TOKEN)"); \
+	  MODEL_ACTIVE=$$(printf '%s' "$$STATUS_JSON" | jq -r '.active_model'); \
 	  if [ -z "$$MODEL_ACTIVE" ] || [ "$$MODEL_ACTIVE" = "null" ]; then \
 	    echo "ERROR: no hay active_model en modo llm"; exit 1; \
 	  fi; \
-	  echo "Llamada usada: POST http://127.0.0.1:4000/v1/chat/completions (model=$$MODEL_ACTIVE)"; \
+	  MODEL_LITELLM=$$(printf '%s' "$$STATUS_JSON" | jq -r '.active_litellm_model // empty'); \
+	  if [ -z "$$MODEL_LITELLM" ]; then \
+	    MODEL_LITELLM=$$(curl -sf $(SWITCHER_URL)/models -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq -r --arg mid "$$MODEL_ACTIVE" '[.models[]? | select(.id == $$mid) | .litellm_model][0] // empty'); \
+	  fi; \
+	  if [ -z "$$MODEL_LITELLM" ] || [ "$$MODEL_LITELLM" = "null" ]; then \
+	    MODEL_LITELLM="$$MODEL_ACTIVE"; \
+	  fi; \
+	  echo "Llamada usada: POST http://127.0.0.1:4000/v1/chat/completions (model=$$MODEL_LITELLM)"; \
 	  curl -sf http://127.0.0.1:4000/v1/chat/completions \
 	    -H "Authorization: Bearer $(API_KEY)" \
 	    -H "Content-Type: application/json" \
-	    -d "{\"model\":\"$$MODEL_ACTIVE\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"temperature\":0}" \
+	    -d "{\"model\":\"$$MODEL_LITELLM\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"temperature\":0}" \
 	    | jq -e '.choices[0].message.content' >/dev/null; \
-	  echo "OK: LiteLLM/vLLM responde con $$MODEL_ACTIVE"; \
+	  echo "OK: LiteLLM/vLLM responde con $$MODEL_LITELLM"; \
 	elif [ "$$MODE" = "comfy" ]; then \
 	  echo "Llamada usada: GET http://127.0.0.1:8188/system_stats"; \
 	  curl -sf http://127.0.0.1:8188/system_stats | jq -e '.' >/dev/null; \

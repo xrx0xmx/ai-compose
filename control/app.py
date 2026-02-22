@@ -379,6 +379,18 @@ def active_model() -> Optional[str]:
   return current if current in MODELS else None
 
 
+def litellm_model_for_internal(model_id: Optional[str]) -> Optional[str]:
+  if model_id is None:
+    return None
+  model_meta = MODELS.get(model_id)
+  if model_meta is None:
+    return None
+  litellm_model = model_meta.get("litellm_model")
+  if not litellm_model:
+    return None
+  return str(litellm_model)
+
+
 def ensure_active_config(model: str) -> None:
   os.makedirs(CONFIG_DIR, exist_ok=True)
   template_name = MODELS[model]["template"]
@@ -566,10 +578,13 @@ def status_payload() -> Dict[str, Any]:
   runtime = runtime_state()
   mode = active_mode()
   lease = comfy_lease_status()
+  active_model_id = active_model()
+  active_litellm_model = litellm_model_for_internal(active_model_id)
 
   return {
     "running_models": running_models,
-    "active_model": active_model(),
+    "active_model": active_model_id,
+    "active_litellm_model": active_litellm_model,
     "active_mode": mode,
     "mode": {
       "active": mode,
@@ -666,6 +681,8 @@ def run_switch_pipeline(model: str, switch_id: int, *, raise_http_errors: bool) 
   before = status_payload()
   running_before = running_models_from_status(before)
   from_model = running_before[0] if running_before else before.get("active_model")
+  litellm_before = before.get("litellm", {})
+  litellm_running_before = snapshot_is_running(litellm_before)
   disruptive_started = False
 
   update_switch_state(
@@ -710,7 +727,7 @@ def run_switch_pipeline(model: str, switch_id: int, *, raise_http_errors: bool) 
       state_text="ComfyUI detenido",
     )
 
-    if from_model == model and len(running_before) == 1:
+    if from_model == model and len(running_before) == 1 and litellm_running_before:
       add_step(
         steps,
         "noop",
@@ -1202,6 +1219,8 @@ def run_mode_switch_pipeline(
   before = status_payload()
   running_before = running_models_from_status(before)
   from_model = running_before[0] if running_before else before.get("active_model")
+  litellm_before = before.get("litellm", {})
+  litellm_running_before = snapshot_is_running(litellm_before)
   disruptive_started = False
 
   update_switch_state(
@@ -1230,7 +1249,7 @@ def run_mode_switch_pipeline(
 
     comfy_state = before.get("comfyui", {})
     comfy_running = isinstance(comfy_state, dict) and comfy_state.get("status") == "running"
-    if active_mode() == MODE_COMFY and comfy_running and len(running_before) == 0:
+    if active_mode() == MODE_COMFY and comfy_running and len(running_before) == 0 and not litellm_running_before:
       lease_until = set_comfy_lease(ttl_minutes)
       set_active_mode(MODE_COMFY)
       add_step(
@@ -1590,6 +1609,135 @@ def run_mode_switch_pipeline_async(req_payload: Dict[str, Any], switch_id: int) 
     SWITCH_LOCK.release()
 
 
+def snapshot_is_running(snapshot: Any) -> bool:
+  return isinstance(snapshot, dict) and snapshot.get("status") == "running"
+
+
+def startup_reconcile_error_detail(message: str) -> str:
+  detail = message.strip()
+  if "target container is not created" in detail and "prod-bootstrap-models" in detail:
+    return detail
+  if "target container is not created" in detail:
+    return f"{detail}. Run make prod-bootstrap-models first."
+  if "container not found while waiting" in detail or "rollback container missing" in detail:
+    return f"{detail}. Run make prod-bootstrap-models first."
+  return detail
+
+
+def startup_reconcile_llm_blocking() -> Optional[int]:
+  configured_model = active_model()
+  target_model = configured_model if configured_model in MODELS else default_llm_model()
+
+  if configured_model != target_model:
+    ensure_active_config(target_model)
+
+  payload = status_payload()
+  running_models = running_models_from_status(payload)
+  litellm_running = snapshot_is_running(payload.get("litellm"))
+
+  if running_models == [target_model] and litellm_running:
+    return None
+
+  switch_id = create_switch_state(
+    to_model=target_model,
+    from_model=running_models[0] if running_models else payload.get("active_model"),
+    state="queued",
+    state_text=f"Reconciliando arranque en modo llm ({target_model})",
+    current_step="startup_reconcile",
+  )
+
+  result = run_mode_switch_pipeline(
+    ModeSwitchRequest(mode=MODE_LLM, model=target_model, wait_for_ready=True),
+    switch_id,
+    raise_http_errors=False,
+    source="startup_reconcile",
+  )
+  status = result.get("status")
+  if status != "success":
+    error_detail = startup_reconcile_error_detail(
+      str(result.get("error") or f"startup llm reconciliation finished with status={status}")
+    )
+    set_runtime_state(last_error=error_detail)
+    update_switch_state(
+      switch_id,
+      state_text="Reconciliacion de arranque en modo llm incompleta",
+      error=error_detail,
+      ready=False,
+    )
+  return switch_id
+
+
+def startup_reconcile_comfy_blocking() -> Optional[int]:
+  payload = status_payload()
+  running_models = running_models_from_status(payload)
+  litellm_running = snapshot_is_running(payload.get("litellm"))
+  comfy_running = snapshot_is_running(payload.get("comfyui"))
+
+  if comfy_running and not litellm_running and len(running_models) == 0:
+    return None
+
+  switch_id = create_switch_state(
+    to_model=f"mode:{MODE_COMFY}",
+    from_model=running_models[0] if running_models else payload.get("active_model"),
+    state="queued",
+    state_text="Reconciliando arranque en modo comfy",
+    current_step="startup_reconcile",
+  )
+
+  result = run_mode_switch_pipeline(
+    ModeSwitchRequest(mode=MODE_COMFY, wait_for_ready=True),
+    switch_id,
+    raise_http_errors=False,
+    source="startup_reconcile",
+  )
+  status = result.get("status")
+  if status != "success":
+    error_detail = startup_reconcile_error_detail(
+      str(result.get("error") or f"startup comfy reconciliation finished with status={status}")
+    )
+    set_runtime_state(last_error=error_detail)
+    update_switch_state(
+      switch_id,
+      state_text="Reconciliacion de arranque en modo comfy incompleta",
+      error=error_detail,
+      ready=False,
+    )
+  return switch_id
+
+
+def startup_reconcile_mode_blocking() -> None:
+  mode = active_mode()
+  if mode not in VALID_MODES:
+    mode = MODE_LLM
+
+  switch_id: Optional[int] = None
+  try:
+    if mode == MODE_COMFY:
+      switch_id = startup_reconcile_comfy_blocking()
+    else:
+      switch_id = startup_reconcile_llm_blocking()
+  except Exception as exc:
+    error_detail = startup_reconcile_error_detail(f"startup reconciliation failed: {exc}")
+    set_runtime_state(last_error=error_detail)
+    if switch_id is None:
+      fallback_target = f"mode:{MODE_COMFY}" if mode == MODE_COMFY else (active_model() or default_llm_model())
+      switch_id = create_switch_state(
+        to_model=fallback_target,
+        from_model=active_model(),
+        state="running",
+        state_text="Reconciliando estado tras arranque",
+        current_step="startup_reconcile",
+      )
+    update_switch_state(
+      switch_id,
+      state="failed",
+      current_step="complete",
+      state_text="Error en reconciliacion de arranque",
+      ready=False,
+      error=error_detail,
+    )
+
+
 def monitor_comfy_lease() -> None:
   poll_seconds = max(MODE_MONITOR_POLL_SECONDS, 1)
   while True:
@@ -1643,6 +1791,8 @@ def startup_init_mode() -> None:
 
   if active_mode() != MODE_COMFY:
     clear_comfy_lease()
+
+  startup_reconcile_mode_blocking()
 
   with MODE_MONITOR_LOCK:
     if MODE_MONITOR_THREAD is None or not MODE_MONITOR_THREAD.is_alive():

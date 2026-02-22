@@ -66,6 +66,13 @@ MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-llm-priority
 
 `prod-comfy-on` aplica lease con TTL (default 45 min, máximo 90). Al expirar, vuelve automáticamente a `llm` con `qwen-fast` (o `MODEL_SWITCHER_DEFAULT`).
 
+### Reconciliación de arranque (startup)
+
+Al iniciar `model-switcher`, se ejecuta una reconciliación bloqueante del estado persistido:
+- Si el modo persistido es `llm`, valida modelo objetivo (`active_model` o fallback a `MODEL_SWITCHER_DEFAULT`) y deja consistente `LiteLLM + un único vllm-*`.
+- Si el modo persistido es `comfy`, valida `comfyui` activo y `litellm` detenido.
+- Si faltan contenedores creados, el error queda registrado en `last_error` y en `switch.error` con mensaje accionable (`make prod-bootstrap-models`).
+
 ## Model switcher (control desde Open WebUI)
 
 Permite cambiar modelo desde un Tool OpenAPI en Open WebUI.
@@ -124,6 +131,7 @@ make prod-admin-url
 - `id`, `state` (`queued|running|success|failed|rolled_back`), `from_model`, `to_model`
 - `current_step`, `state_text`, `started_at`, `updated_at`, `finished_at`
 - `duration_ms`, `error`, `steps`, `ready`
+- `active_litellm_model` (id real para llamadas a LiteLLM, ej. `deepseek-r1`)
 
 `GET /mode` devuelve:
 - modo activo (`llm|comfy`) y lease de ComfyUI (`expires_at`, `remaining_seconds`, `expired`)
@@ -147,15 +155,49 @@ Caso: sistema en `comfy` y chat LLM no disponible.
 MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-mode-status
 ```
 
-2. Recupera prioridad LLM (forzado):
+2. Inspecciona estado detallado (incluye `active_litellm_model`):
+```bash
+MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-status
+```
+
+3. Recupera prioridad LLM (forzado):
 ```bash
 MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-llm-priority
 ```
 
-3. Confirma estado:
+4. Confirma estado:
 ```bash
 MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-mode-status
 MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-test
+```
+
+Caso: `deepseek` activo pero LiteLLM devuelve `Cannot connect to host vllm-deepseek`.
+
+1. Inspecciona estado y logs:
+```bash
+MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-mode-status
+MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-status
+make prod-logs SERVICE=litellm TAIL=200
+make prod-logs SERVICE=vllm-deepseek TAIL=200
+```
+
+2. Si faltan contenedores (`containers.deepseek.exists=false` o `comfyui`/modelos inexistentes), crea bootstrap:
+```bash
+make prod-bootstrap-models
+```
+
+3. Fuerza prioridad LLM y activa DeepSeek:
+```bash
+MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-llm-priority
+MODEL_SWITCHER_TOKEN=tu_token_seguro MODEL=deepseek make prod-switch
+```
+
+4. Verifica respuesta con el id real de LiteLLM (`deepseek-r1`):
+```bash
+curl -sf http://127.0.0.1:4000/v1/chat/completions \
+  -H "Authorization: Bearer <LITELLM_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"deepseek-r1","messages":[{"role":"user","content":"ping"}],"temperature":0}' | jq
 ```
 
 ## Test único de salud
@@ -165,7 +207,7 @@ make prod-test
 ```
 
 `prod-test` autodetecta el modo activo:
-- En `llm`, ejecuta `POST /v1/chat/completions` contra LiteLLM con el modelo activo.
+- En `llm`, ejecuta `POST /v1/chat/completions` contra LiteLLM con `active_litellm_model` (o fallback por mapeo `/models`).
 - En `comfy`, ejecuta `GET /system_stats` contra ComfyUI.
 
 En ambos casos imprime la llamada que ha usado para verificar.
