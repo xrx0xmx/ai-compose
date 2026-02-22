@@ -232,8 +232,7 @@ services:
 
   admin-panel:
     build:
-      context: .
-      dockerfile: admin/Dockerfile
+      context: ./admin
     container_name: admin-panel
     environment:
       - ADMIN_JWT_SECRET=${ADMIN_JWT_SECRET:-change-this-jwt-secret}
