@@ -1,91 +1,121 @@
 # ============================================================
-# Makefile — local (Mac/Ollama) y prod (servidor/vLLM+GPU)
+# Makefile — Producción (LiteLLM + vLLM + ComfyUI)
 # ============================================================
 
-# --- Local (Mac) ---
-LOCAL=docker compose -f docker-compose.yml -f docker-compose.local.yml
-KEY ?= $(or $(LITELLM_KEY),cambiaLAclave)
 SWITCHER_TOKEN ?= $(MODEL_SWITCHER_TOKEN)
 SWITCHER_TOKEN := $(or $(SWITCHER_TOKEN),change_me)
 SWITCHER_URL ?= http://127.0.0.1:9000
+API_KEY ?= $(or $(LITELLM_KEY),cambiaLAclave)
+MODEL ?= qwen-fast
+COMFY_TTL ?= 45
+TAIL ?= 200
+SERVICE ?=
 
-local-up:      ; $(LOCAL) up -d
-local-web:     ; $(LOCAL) --profile webui up -d
-local-down:    ; $(LOCAL) --profile webui down --remove-orphans
-local-ps:      ; $(LOCAL) --profile webui ps -a
-local-logs:    ; $(LOCAL) --profile webui logs -f --tail=200
-local-pull:    ; $(LOCAL) --profile webui pull
+-include Makefile.ops
 
-# Ollama: descargar modelo (ejecutar una vez)
-local-init:    ; docker exec ollama ollama pull qwen2.5:7b
-
-# --- Producción (servidor con GPU) ---
 PROD_DIR ?= /opt/ai/compose
-PROD_COMPOSE=docker compose -f docker-compose.yml -f docker-compose.prod.yml
-PROD=cd $(PROD_DIR) && $(PROD_COMPOSE)
-PROD_MODEL_PROFILES=--profile qwen-fast --profile qwen-quality --profile deepseek --profile qwen-max
+PROD_COMPOSE = docker compose -f docker-compose.yml -f docker-compose.prod.yml
+PROD = cd $(PROD_DIR) && $(PROD_COMPOSE)
+PROD_MODEL_PROFILES = --profile qwen-fast --profile qwen-quality --profile deepseek --profile qwen-max --profile comfy
+PROD_ALL_PROFILES = --profile webui $(PROD_MODEL_PROFILES)
 
-prod-bootstrap-models: ; $(PROD) $(PROD_MODEL_PROFILES) create vllm-fast vllm-quality vllm-deepseek vllm-qwen32b
-prod-build-switcher:  ; $(PROD) --profile webui build model-switcher
-prod-up:           ; $(PROD) --profile webui up -d
-prod-qwen-fast:
+help:
+	@echo "Comandos principales:"
+	@echo "  make prod-init                  # levanta servicios base y crea contenedores de modelos/comfy"
+	@echo "  make prod-up                    # levanta stack base (webui + switcher + db)"
+	@echo "  make prod-down                  # apaga todo"
+	@echo "  make prod-ps                    # estado de contenedores"
+	@echo "  make prod-pull                  # actualiza imagenes"
+	@echo ""
+	@echo "Control de modo/modelo:"
+	@echo "  make prod-switch MODEL=qwen-fast|qwen-quality|deepseek|qwen-max"
+	@echo "  make prod-comfy-on COMFY_TTL=45"
+	@echo "  make prod-comfy-off MODEL=qwen-fast"
+	@echo "  make prod-llm-priority"
+	@echo "  make prod-status | make prod-mode-status"
+	@echo "  make prod-test                 # prueba unica; decide llamada segun modo activo"
+	@echo ""
+	@echo "Logs:"
+	@echo "  make prod-logs-all TAIL=200"
+	@echo "  make prod-logs SERVICE=litellm TAIL=200"
+	@echo "  make prod-logs-<servicio> TAIL=200   (ej: prod-logs-model-switcher)"
+	@echo "  make prod-logs-list"
+
+# --- Ciclo de vida ---
+prod-init:
 	@$(MAKE) prod-up
 	@$(MAKE) prod-bootstrap-models
-	@$(MAKE) prod-switch MODEL=qwen-fast
-prod-qwen-quality:
-	@$(MAKE) prod-up
-	@$(MAKE) prod-bootstrap-models
-	@$(MAKE) prod-switch MODEL=qwen-quality
-prod-deepseek:
-	@$(MAKE) prod-up
-	@$(MAKE) prod-bootstrap-models
-	@$(MAKE) prod-switch MODEL=deepseek
-prod-qwen-max:
-	@$(MAKE) prod-up
-	@$(MAKE) prod-bootstrap-models
-	@$(MAKE) prod-switch MODEL=qwen-max
-prod-down:         ; $(PROD) --profile qwen-fast --profile qwen-quality --profile deepseek --profile qwen-max --profile webui down
-prod-ps:           ; $(PROD) ps
-prod-logs:         ; $(PROD) logs -f --tail=200
-prod-pull:         ; $(PROD) --profile qwen-fast --profile qwen-quality --profile deepseek --profile qwen-max --profile webui pull
-prod-restart:      ; $(PROD) restart
+
+prod-up:               ; $(PROD) --profile webui up -d
+prod-build-switcher:   ; $(PROD) --profile webui build model-switcher
+prod-bootstrap-models: ; $(PROD) $(PROD_MODEL_PROFILES) create vllm-fast vllm-quality vllm-deepseek vllm-qwen32b comfyui
+prod-down:             ; $(PROD) $(PROD_ALL_PROFILES) down
+prod-ps:               ; $(PROD) ps
+prod-pull:             ; $(PROD) $(PROD_ALL_PROFILES) pull
+prod-restart:          ; $(PROD) restart
+
+# --- Control API model-switcher ---
 prod-switch:       ; curl -s $(SWITCHER_URL)/switch -H "Authorization: Bearer $(SWITCHER_TOKEN)" -H "Content-Type: application/json" -d '{"model":"$(MODEL)"}' | jq
+prod-switch-async: ; curl -s $(SWITCHER_URL)/switch -H "Authorization: Bearer $(SWITCHER_TOKEN)" -H "Content-Type: application/json" -d '{"model":"$(MODEL)","wait_for_ready":false}' | jq
 prod-status:       ; curl -s $(SWITCHER_URL)/status -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
+prod-mode-status:  ; curl -s $(SWITCHER_URL)/mode -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
 prod-list-models:  ; curl -s $(SWITCHER_URL)/models -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
 prod-stop-models:  ; curl -s $(SWITCHER_URL)/stop -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
+prod-comfy-on:     ; curl -s $(SWITCHER_URL)/mode/switch -H "Authorization: Bearer $(SWITCHER_TOKEN)" -H "Content-Type: application/json" -d '{"mode":"comfy","ttl_minutes":$(COMFY_TTL)}' | jq
+prod-comfy-off:    ; curl -s $(SWITCHER_URL)/mode/switch -H "Authorization: Bearer $(SWITCHER_TOKEN)" -H "Content-Type: application/json" -d '{"mode":"llm","model":"$(MODEL)"}' | jq
+prod-llm-priority: ; curl -s $(SWITCHER_URL)/mode/release -H "Authorization: Bearer $(SWITCHER_TOKEN)" -H "Content-Type: application/json" -d '{}' | jq
 
-# --- Smoke tests (funcionan en ambos entornos) ---
-models:             ; curl -s http://127.0.0.1:4000/v1/models -H "Authorization: Bearer $(KEY)" | jq
-test-qwen-fast:     ; curl -s http://127.0.0.1:4000/v1/chat/completions \
-                      -H "Authorization: Bearer $(KEY)" \
-                      -H "Content-Type: application/json" \
-                      -d '{"model":"qwen-fast","messages":[{"role":"user","content":"Di hola en castellano."}],"temperature":0.2}' \
-                      | jq -r '.choices[0].message.content'
-test-qwen-quality:  ; curl -s http://127.0.0.1:4000/v1/chat/completions \
-                      -H "Authorization: Bearer $(KEY)" \
-                      -H "Content-Type: application/json" \
-                      -d '{"model":"qwen-quality","messages":[{"role":"user","content":"Di hola en castellano."}],"temperature":0.2}' \
-                      | jq -r '.choices[0].message.content'
-test-deepseek:      ; curl -s http://127.0.0.1:4000/v1/chat/completions \
-                      -H "Authorization: Bearer $(KEY)" \
-                      -H "Content-Type: application/json" \
-                      -d '{"model":"deepseek-r1","messages":[{"role":"user","content":"Di hola en castellano."}],"temperature":0.2}' \
-                      | jq -r '.choices[0].message.content'
-test-qwen-max:      ; curl -s http://127.0.0.1:4000/v1/chat/completions \
-                      -H "Authorization: Bearer $(KEY)" \
-                      -H "Content-Type: application/json" \
-                      -d '{"model":"qwen-max","messages":[{"role":"user","content":"Di hola en castellano."}],"temperature":0.2}' \
-                      | jq -r '.choices[0].message.content'
+# --- Test unico (autodetecta modo) ---
+prod-test:
+	@MODE=$$(curl -sf $(SWITCHER_URL)/mode -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq -r '.mode.active'); \
+	if [ "$$MODE" = "llm" ]; then \
+	  MODEL_ACTIVE=$$(curl -sf $(SWITCHER_URL)/status -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq -r '.active_model'); \
+	  if [ -z "$$MODEL_ACTIVE" ] || [ "$$MODEL_ACTIVE" = "null" ]; then \
+	    echo "ERROR: no hay active_model en modo llm"; exit 1; \
+	  fi; \
+	  echo "Llamada usada: POST http://127.0.0.1:4000/v1/chat/completions (model=$$MODEL_ACTIVE)"; \
+	  curl -sf http://127.0.0.1:4000/v1/chat/completions \
+	    -H "Authorization: Bearer $(API_KEY)" \
+	    -H "Content-Type: application/json" \
+	    -d "{\"model\":\"$$MODEL_ACTIVE\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"temperature\":0}" \
+	    | jq -e '.choices[0].message.content' >/dev/null; \
+	  echo "OK: LiteLLM/vLLM responde con $$MODEL_ACTIVE"; \
+	elif [ "$$MODE" = "comfy" ]; then \
+	  echo "Llamada usada: GET http://127.0.0.1:8188/system_stats"; \
+	  curl -sf http://127.0.0.1:8188/system_stats | jq -e '.' >/dev/null; \
+	  echo "OK: ComfyUI responde"; \
+	else \
+	  echo "ERROR: modo desconocido '$$MODE'"; exit 1; \
+	fi
 
-# --- VPN (WireGuard) ---
-vpn-up:    ; sudo wg-quick up somia-adam
-vpn-down:  ; sudo wg-quick down somia-adam
-vpn-status: ; sudo wg show
+# --- Logs ---
+prod-logs-list:
+	@echo "Servicios de logs:"
+	@echo "  postgres"
+	@echo "  litellm"
+	@echo "  docker-socket-proxy"
+	@echo "  model-switcher"
+	@echo "  vllm-fast"
+	@echo "  vllm-quality"
+	@echo "  vllm-deepseek"
+	@echo "  vllm-qwen32b"
+	@echo "  comfyui"
+	@echo "  open-webui"
 
-# --- SSH al servidor de producción ---
-ssh:       ; ssh somia
+prod-logs-all:
+	$(PROD) logs -f --tail=$(TAIL)
 
-.PHONY: local-up local-web local-down local-ps local-logs local-pull local-init \
-        prod-bootstrap-models prod-build-switcher prod-up prod-qwen-fast prod-qwen-quality prod-deepseek prod-qwen-max prod-down prod-ps prod-logs prod-pull prod-restart \
-        prod-switch prod-status prod-list-models prod-stop-models \
-        models test-qwen-fast test-qwen-quality test-deepseek test-qwen-max vpn-up vpn-down vpn-status ssh
+prod-logs:
+ifeq ($(strip $(SERVICE)),)
+	$(PROD) logs -f --tail=$(TAIL)
+else
+	$(PROD) logs -f --tail=$(TAIL) $(SERVICE)
+endif
+
+prod-logs-%:
+	$(PROD) logs -f --tail=$(TAIL) $*
+
+.PHONY: help \
+        prod-init prod-up prod-build-switcher prod-bootstrap-models prod-down prod-ps prod-pull prod-restart \
+        prod-switch prod-switch-async prod-status prod-mode-status prod-list-models prod-stop-models prod-comfy-on prod-comfy-off prod-llm-priority prod-test \
+        prod-logs-list prod-logs-all prod-logs prod-logs-%

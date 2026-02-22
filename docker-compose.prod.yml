@@ -50,6 +50,10 @@ services:
       - DOCKER_PROXY_URL=http://docker-socket-proxy:2375
       - MODEL_CONFIG_DIR=/config
       - MODEL_TEMPLATE_DIR=/opt/model-configs
+      - MODEL_SWITCHER_COMFY_CONTAINER=comfyui
+      - MODEL_SWITCHER_COMFY_DEFAULT_TTL_MINUTES=${MODEL_SWITCHER_COMFY_DEFAULT_TTL_MINUTES:-45}
+      - MODEL_SWITCHER_COMFY_MAX_TTL_MINUTES=${MODEL_SWITCHER_COMFY_MAX_TTL_MINUTES:-90}
+      - MODEL_SWITCHER_MODE_POLL_INTERVAL_SECONDS=${MODEL_SWITCHER_MODE_POLL_INTERVAL_SECONDS:-5}
     depends_on:
       - docker-socket-proxy
     volumes:
@@ -196,6 +200,28 @@ services:
       start_period: 180s
     restart: unless-stopped
     profiles: ["qwen-max"]
+
+  # ComfyUI (imagen) — activación bajo demanda para no competir con LLM
+  comfyui:
+    image: ghcr.io/comfyanonymous/comfyui:latest
+    container_name: comfyui
+    runtime: nvidia
+    ports:
+      - "127.0.0.1:8188:8188"
+    environment:
+      - HUGGINGFACE_HUB_CACHE=/data/hf-cache
+      - HF_HOME=/data/hf-cache
+    volumes:
+      - /opt/ai/comfyui-data:/root/ComfyUI
+      - /opt/ai/hf-cache:/data/hf-cache
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8188/system_stats || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
+    restart: unless-stopped
+    profiles: ["comfy"]
 
   open-webui:
     volumes:

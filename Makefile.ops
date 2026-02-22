@@ -1,0 +1,11 @@
+# ============================================================
+# Operaciones host (VPN/SSH)
+# Se incluye desde Makefile para mantener `make vpn-up`, etc.
+# ============================================================
+
+vpn-up:     ; sudo wg-quick up somia-adam
+vpn-down:   ; sudo wg-quick down somia-adam
+vpn-status: ; sudo wg show
+ssh:        ; ssh somia
+
+.PHONY: vpn-up vpn-down vpn-status ssh
