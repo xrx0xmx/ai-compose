@@ -217,7 +217,11 @@ services:
     volumes:
       - /opt/ai/comfyui-data:/root/ComfyUI
       - /opt/ai/hf-cache:/data/hf-cache
-      - ./comfyui/manager-config.ini:/root/ComfyUI/custom_nodes/ComfyUI-Manager/config.ini:ro
+      # ComfyUI-Manager config path changed in recent versions:
+      # - v0.3.76+ -> /root/ComfyUI/user/__manager/config.ini
+      # - older   -> /root/ComfyUI/user/default/ComfyUI-Manager/config.ini
+      - ./comfyui/manager-config.ini:/root/ComfyUI/user/__manager/config.ini:ro
+      - ./comfyui/manager-config.ini:/root/ComfyUI/user/default/ComfyUI-Manager/config.ini:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8188/system_stats || exit 1"]
       interval: 30s
