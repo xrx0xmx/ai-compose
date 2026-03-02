@@ -65,16 +65,17 @@ PROD_ENV = \
 	MODEL_SWITCHER_DYNAMIC_ALLOW_TRUST_REMOTE_CODE=$(MODEL_SWITCHER_DYNAMIC_ALLOW_TRUST_REMOTE_CODE) \
 	MODEL_SWITCHER_TRUSTED_REPOS=$(MODEL_SWITCHER_TRUSTED_REPOS)
 PROD = cd $(PROD_DIR) && $(PROD_ENV) $(PROD_COMPOSE)
+PROD_BASE_SERVICES = postgres litellm docker-socket-proxy model-switcher open-webui admin-panel
 PROD_MODEL_PROFILES = --profile qwen-fast --profile qwen-quality --profile deepseek --profile qwen-max --profile comfy
 PROD_ALL_PROFILES = --profile webui $(PROD_MODEL_PROFILES)
 
 help:
 	@echo "Comandos principales:"
 	@echo "  make prod-init                  # levanta servicios base y crea contenedores de modelos/comfy"
-	@echo "  make prod-up                    # levanta stack base (webui + switcher + db)"
+	@echo "  make prod-up                    # levanta stack base (db + litellm + switcher + webui + admin)"
 	@echo "  make prod-build-admin           # rebuild del panel admin"
 	@echo "  make prod-down                  # apaga todo"
-	@echo "  make prod-ps                    # estado de contenedores"
+	@echo "  make prod-ps                    # estado de contenedores (incluye parados/fallidos)"
 	@echo "  make prod-pull                  # actualiza imagenes"
 	@echo ""
 	@echo "Control de modo/modelo:"
@@ -114,14 +115,14 @@ prod-init:
 	@$(MAKE) prod-up
 	@$(MAKE) prod-bootstrap-models
 
-prod-up:               ; $(PROD) --profile webui up -d
+prod-up:               ; $(PROD) --profile webui up -d $(PROD_BASE_SERVICES)
 prod-build-admin:      ; $(PROD) --profile webui build admin-panel && $(PROD) --profile webui up -d admin-panel
 prod-build-switcher:   ; $(PROD) --profile webui build model-switcher
 prod-bootstrap-models: ; $(PROD) $(PROD_MODEL_PROFILES) create vllm-fast vllm-quality vllm-deepseek vllm-qwen32b comfyui
 prod-down:             ; $(PROD) $(PROD_ALL_PROFILES) down
-prod-ps:               ; $(PROD) ps
+prod-ps:               ; $(PROD) $(PROD_ALL_PROFILES) ps --all
 prod-pull:             ; $(PROD) $(PROD_ALL_PROFILES) pull
-prod-restart:          ; $(PROD) restart
+prod-restart:          ; $(PROD) --profile webui restart $(PROD_BASE_SERVICES)
 
 # --- Control API model-switcher ---
 prod-switch:       ; curl -s $(SWITCHER_URL)/switch -H "Authorization: Bearer $(SWITCHER_TOKEN)" -H "Content-Type: application/json" -d '{"model":"$(MODEL)"}' | jq
@@ -314,6 +315,7 @@ prod-logs-list:
 	@echo "  vllm-qwen32b"
 	@echo "  comfyui"
 	@echo "  open-webui"
+	@echo "  admin-panel"
 	@echo "  (dynamic) usa: make prod-logs-container CONTAINER=vllm-<id>"
 
 prod-logs-all:
