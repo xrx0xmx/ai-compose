@@ -279,7 +279,7 @@ services:
       open-webui:
         condition: service_started
     volumes:
-      - ./ops/nginx/gateway.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./ops/nginx/:/etc/nginx/conf.d/:ro
     ports:
       - "80:80"
     profiles: ["webui"]
