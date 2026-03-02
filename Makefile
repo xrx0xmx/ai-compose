@@ -72,7 +72,7 @@ PROD_ALL_PROFILES = --profile webui $(PROD_MODEL_PROFILES)
 help:
 	@echo "Comandos principales:"
 	@echo "  make prod-init                  # levanta servicios base y crea contenedores de modelos/comfy"
-	@echo "  make prod-up                    # levanta stack base (db + litellm + switcher + webui + admin)"
+	@echo "  make prod-up                    # levanta stack base y asegura contenedores de modelos/comfy"
 	@echo "  make prod-up-admin              # fuerza arranque solo de admin-panel"
 	@echo "  make prod-build-admin           # rebuild del panel admin"
 	@echo "  make prod-down                  # apaga todo"
@@ -114,11 +114,11 @@ help:
 # --- Ciclo de vida ---
 prod-init:
 	@$(MAKE) prod-up
-	@$(MAKE) prod-bootstrap-models
 
 prod-up:
 	@$(PROD) --profile webui up -d --remove-orphans $(PROD_BASE_SERVICES)
 	@$(PROD) --profile webui up -d --remove-orphans admin-panel
+	@$(PROD) $(PROD_MODEL_PROFILES) create vllm-fast vllm-quality vllm-deepseek vllm-qwen32b comfyui
 prod-up-admin:         ; $(PROD) --profile webui up -d --remove-orphans admin-panel
 prod-build-admin:      ; $(PROD) --profile webui build admin-panel && $(PROD) --profile webui up -d --remove-orphans admin-panel
 prod-build-switcher:   ; $(PROD) --profile webui build model-switcher
