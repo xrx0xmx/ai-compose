@@ -253,17 +253,12 @@ make prod-register-model
 - modo activo (`llm|comfy`) y lease de ComfyUI (`expires_at`, `remaining_seconds`, `expired`)
 - estado de `litellm`, `comfyui`, `running_models` y switch en curso
 
-## Publicación reutilizable en Docker (sin puertos directos)
+## Publicación directa por puertos (sin gateway Nginx)
 
-El stack productivo incluye un gateway Nginx en Docker (`nginx-gateway`) que publica:
-- `/admin` -> panel admin
-- `/openwebui/` -> OpenWebUI
-- `/comfyui/` -> ComfyUI
-
-La configuración está versionada en:
-- `ops/nginx/gateway.conf`
-
-Con este diseño, `open-webui` y `comfyui` no se publican por puertos directos en host.
+El stack productivo publica directamente en host:
+- `http://<host>:80/admin` -> panel admin
+- `http://<host>:3000` -> OpenWebUI
+- `http://<host>:8188` -> ComfyUI (cuando está activo)
 
 Pasos:
 
@@ -275,20 +270,14 @@ make prod-init
 Validaciones rápidas:
 
 ```bash
-# 3000/8188 no deben aparecer en listeners del host
+# 3000 debe aparecer; 8188 aparece cuando ComfyUI está activo
 make prod-ports-check
 
-# Rutas del gateway (puerto 80)
-make prod-proxy-check PROXY_BASE_URL=http://127.0.0.1
+# URLs directas
+make prod-proxy-check
 ```
 
-Nota: `/comfyui/` puede responder `502/503` cuando ComfyUI está apagado (modo `llm`), y se considera normal.
-
-Si proteges el gateway con auth, añade:
-
-```bash
-make prod-proxy-check PROXY_BASE_URL=https://tu-dominio PROXY_USER=admin PROXY_PASS='<password>'
-```
+Nota: `:8188` puede no responder cuando ComfyUI está apagado (modo `llm`), y se considera normal.
 
 La UI `/admin` pide token `MODEL_SWITCHER_TOKEN` y usa:
 - `POST /mode/switch` para `llm|comfy`
@@ -361,7 +350,7 @@ make prod-test
 
 `prod-test` autodetecta el modo activo:
 - En `llm`, ejecuta `POST /v1/chat/completions` contra LiteLLM con `active_litellm_model` (o fallback por mapeo `/models`).
-- En `comfy`, ejecuta `GET /comfyui/system_stats` a través del gateway (`PROXY_BASE_URL`, default `http://127.0.0.1`).
+- En `comfy`, ejecuta `GET http://127.0.0.1:8188/system_stats` directamente contra ComfyUI.
 
 En ambos casos imprime la llamada que ha usado para verificar.
 

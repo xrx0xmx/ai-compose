@@ -1637,7 +1637,9 @@ function renderModelGrid() {
   const models = aiModelsData?.models || [];
   const activeMode = aiModelsData?.active_mode || statusData?.mode?.active || statusData?.active_mode;
   const switchInProgress = Boolean(aiModelsData?.switch_in_progress || statusData?.switch_in_progress);
-  const webuiUrl = '/openwebui/';
+  const host = window.location.hostname || '127.0.0.1';
+  const protocol = window.location.protocol || 'http:';
+  const webuiUrl = `${protocol}//${host}:3000`;
 
   models.forEach(model => {
     const isActive = Boolean(model.is_active);
@@ -1687,7 +1689,7 @@ function renderModelGrid() {
   const comfyRunning = statusData?.comfyui?.status === 'running' || aiModelsData?.comfyui?.status === 'running';
   const lease = statusData?.mode?.lease || aiModelsData?.mode?.lease;
   const comfyTransition = switchInProgress && (pendingModeTarget === 'comfy' || mode === 'comfy');
-  const comfyUrl = '/comfyui/';
+  const comfyUrl = `${protocol}//${host}:8188`;
   const ttlOptions = ['15', '30', '45', '60', '90']
     .map(v => `<option value="${v}" ${previousTtl === v ? 'selected' : ''}>${v} min</option>`)
     .join('');

@@ -211,6 +211,8 @@ services:
     image: ${COMFYUI_IMAGE:-yanwk/comfyui-boot:cu126-slim}
     container_name: comfyui
     runtime: nvidia
+    ports:
+      - "8188:8188"
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
@@ -256,6 +258,8 @@ services:
     networks:
       - default
       - switcher-net
+    ports:
+      - "80:8080"
     depends_on:
       model-switcher:
         condition: service_healthy
@@ -268,21 +272,6 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    restart: unless-stopped
-
-  nginx-gateway:
-    image: nginx:1.27-alpine
-    container_name: nginx-gateway
-    depends_on:
-      admin-panel:
-        condition: service_started
-      open-webui:
-        condition: service_healthy
-    volumes:
-      - ./ops/nginx/:/etc/nginx/conf.d/:ro
-    ports:
-      - "80:80"
-    profiles: ["webui"]
     restart: unless-stopped
 
 networks:
