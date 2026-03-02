@@ -774,8 +774,10 @@ HTML = r"""<!DOCTYPE html>
     padding: 18px; display: flex; flex-direction: column; gap: 10px;
   }
   .model-card.active-model { border-color: var(--green); background: rgba(63,185,80,.06); }
+  .model-card.comfy-active { border-color: var(--purple); background: rgba(188,140,255,.08); }
   .model-card-name { font-weight: 600; font-size: 1rem; }
   .model-card-meta { font-size: .8rem; color: var(--text2); }
+  .model-actions { display: flex; gap: 8px; flex-wrap: wrap; }
   .status-chip {
     display: inline-flex; align-items: center; gap: 5px;
     border-radius: 20px; padding: 3px 10px; font-size: .75rem; font-weight: 500;
@@ -966,36 +968,6 @@ HTML = r"""<!DOCTYPE html>
         <h2>Modelos IA</h2>
         <div class="section-note">Control unificado de modelos LLM y sesión temporal de ComfyUI.</div>
         <div class="model-grid" id="model-grid"></div>
-
-        <div class="comfy-box">
-          <div class="comfy-status-row">
-            <div class="comfy-status-label">ComfyUI:</div>
-            <div id="comfy-status-chip"><span class="status-chip chip-stopped">Inactivo</span></div>
-          </div>
-          <div id="comfy-link-row" style="display:none;margin-bottom:16px;">
-            <a class="comfy-link" id="comfy-link" href="#" target="_blank">🔗 Abrir ComfyUI</a>
-            <span style="font-size:.8rem;color:var(--text2);margin-left:10px;">Disponible hasta: <span id="comfy-expires"></span></span>
-          </div>
-          <div class="comfy-controls" id="comfy-inactive-controls">
-            <span style="font-size:.9rem;color:var(--text2)">TTL:</span>
-            <select class="ttl-select" id="ttl-select">
-              <option value="15">15 min</option>
-              <option value="30">30 min</option>
-              <option value="45" selected>45 min</option>
-              <option value="60">60 min</option>
-              <option value="90">90 min</option>
-            </select>
-            <button class="btn btn-primary" onclick="activateComfy()">🎨 Activar ComfyUI</button>
-          </div>
-          <div style="display:none;" id="comfy-active-controls">
-            <div class="model-return-row">
-              <span style="font-size:.9rem;color:var(--text2)">Volver a LLM:</span>
-              <select class="model-select" id="return-model-select"></select>
-              <button class="btn btn-success" onclick="deactivateComfy()">✅ Volver a LLM</button>
-              <button class="btn btn-danger" onclick="preemptComfy()" title="Fuerza el retorno inmediato a LLM">⚡ Preemption urgente</button>
-            </div>
-          </div>
-        </div>
       </div>
 
       <!-- ── Data ── -->
@@ -1164,7 +1136,6 @@ async function refreshModels() {
   try {
     aiModelsData = await apiFetch('/api/ai/models');
     renderModelGrid();
-    renderComfySection();
     syncReturnModelSelect();
     ensureLogContainerOptions();
   } catch (e) {
@@ -1261,10 +1232,12 @@ function readableModelMeta(model) {
 
 function renderModelGrid() {
   const grid = document.getElementById('model-grid');
+  const previousTtl = document.getElementById('ttl-select')?.value || '45';
   grid.innerHTML = '';
   const models = aiModelsData?.models || [];
   const activeMode = aiModelsData?.active_mode || statusData?.mode?.active || statusData?.active_mode;
   const switchInProgress = Boolean(aiModelsData?.switch_in_progress || statusData?.switch_in_progress);
+  const webuiUrl = 'http://' + serverHost + ':3000';
 
   models.forEach(model => {
     const isActive = Boolean(model.is_active);
@@ -1290,6 +1263,9 @@ function renderModelGrid() {
 
     const repoText = model.hf_repo || model.litellm_model || '—';
     const disabled = switchInProgress || isActive || activeMode === 'comfy';
+    const openUiBtn = isActive
+      ? `<a class="btn btn-ghost" href="${webuiUrl}" target="_blank" rel="noopener noreferrer">🌐 Abrir UI</a>`
+      : '';
     const card = document.createElement('div');
     card.className = 'model-card' + (isActive ? ' active-model' : '');
     card.innerHTML = `
@@ -1297,20 +1273,75 @@ function renderModelGrid() {
       <div class="model-card-meta">${readableModelMeta(model)}</div>
       <div class="model-card-meta">repo: ${repoText}</div>
       <span class="status-chip ${chipClass}">${chipText}</span>
-      <button class="btn ${isActive ? 'btn-ghost' : 'btn-primary'}" onclick="switchToModel('${model.id}')" ${disabled ? 'disabled' : ''}>
-        ${isActive ? '✓ Activo' : 'Activar'}
-      </button>
+      <div class="model-actions">
+        <button class="btn ${isActive ? 'btn-ghost' : 'btn-primary'}" onclick="switchToModel('${model.id}')" ${disabled ? 'disabled' : ''}>
+          ${isActive ? '✓ Activo' : 'Activar'}
+        </button>
+        ${openUiBtn}
+      </div>
     `;
     grid.appendChild(card);
   });
 
+  const mode = statusData?.mode?.active || statusData?.active_mode || aiModelsData?.active_mode;
+  const comfyRunning = statusData?.comfyui?.status === 'running' || aiModelsData?.comfyui?.status === 'running';
+  const lease = statusData?.mode?.lease || aiModelsData?.mode?.lease;
+  const comfyTransition = switchInProgress && (pendingModeTarget === 'comfy' || mode === 'comfy');
+  const comfyUrl = 'http://' + serverHost + ':8188';
+  const ttlOptions = ['15', '30', '45', '60', '90']
+    .map(v => `<option value="${v}" ${previousTtl === v ? 'selected' : ''}>${v} min</option>`)
+    .join('');
+
+  let comfyChip = '<span class="status-chip chip-stopped">○ Inactivo</span>';
+  let comfyControls = `
+    <div class="comfy-controls">
+      <span style="font-size:.9rem;color:var(--text2)">TTL:</span>
+      <select class="ttl-select" id="ttl-select">${ttlOptions}</select>
+      <button class="btn btn-primary" onclick="activateComfy()">🎨 Activar ComfyUI</button>
+    </div>
+  `;
+  let comfyCardClass = 'model-card';
+
+  if (mode === 'comfy' && comfyRunning) {
+    comfyChip = '<span class="status-chip chip-comfy">● Activo</span>';
+    comfyCardClass = 'model-card comfy-active';
+    const expires = lease?.expires_at ? new Date(lease.expires_at).toLocaleTimeString() : 'sin límite';
+    comfyControls = `
+      <a class="comfy-link" href="${comfyUrl}" target="_blank" rel="noopener noreferrer">🔗 Abrir ComfyUI → ${comfyUrl}</a>
+      <div class="model-card-meta">Disponible hasta: ${expires}</div>
+      <div class="model-return-row">
+        <span style="font-size:.9rem;color:var(--text2)">Volver a LLM:</span>
+        <select class="model-select" id="return-model-select"></select>
+        <button class="btn btn-success" onclick="deactivateComfy()">✅ Volver a LLM</button>
+        <button class="btn btn-danger" onclick="preemptComfy()" title="Fuerza el retorno inmediato a LLM">⚡ Preemption urgente</button>
+      </div>
+    `;
+  } else if (comfyTransition) {
+    comfyChip = '<span class="status-chip chip-loading">⏳ Cambiando…</span>';
+    comfyControls = '<div class="model-card-meta">Esperando transición de modo…</div>';
+  }
+
+  const comfyCard = document.createElement('div');
+  comfyCard.className = comfyCardClass;
+  comfyCard.innerHTML = `
+    <div class="model-card-name">ComfyUI</div>
+    <div class="model-card-meta">Generación de imagen (sesión temporal)</div>
+    ${comfyChip}
+    ${comfyControls}
+  `;
+  grid.appendChild(comfyCard);
+
   if (!models.length) {
-    grid.innerHTML = '<div class="card"><div class="card-sub">No hay modelos disponibles.</div></div>';
+    const emptyCard = document.createElement('div');
+    emptyCard.className = 'model-card';
+    emptyCard.innerHTML = '<div class="model-card-name">LLM</div><div class="model-card-meta">No hay modelos LLM registrados.</div>';
+    grid.prepend(emptyCard);
   }
 }
 
 function syncReturnModelSelect() {
   const select = document.getElementById('return-model-select');
+  if (!select) return;
   const previous = select.value;
   const models = aiModelsData?.models || [];
   select.innerHTML = '';
@@ -1320,41 +1351,12 @@ function syncReturnModelSelect() {
     opt.textContent = readableModelName(model.id);
     select.appendChild(opt);
   });
-  if (previous && models.some(m => m.id === previous)) select.value = previous;
-  else if (statusData?.active_model && models.some(m => m.id === statusData.active_model)) select.value = statusData.active_model;
-}
-
-function renderComfySection() {
-  const mode = statusData?.mode?.active || statusData?.active_mode || aiModelsData?.active_mode;
-  const comfyRunning = statusData?.comfyui?.status === 'running' || aiModelsData?.comfyui?.status === 'running';
-  const lease = statusData?.mode?.lease || aiModelsData?.mode?.lease;
-  const switchInProgress = Boolean(statusData?.switch_in_progress || aiModelsData?.switch_in_progress);
-  const comfyTransition = switchInProgress && (pendingModeTarget === 'comfy' || mode === 'comfy');
-
-  const chipEl = document.getElementById('comfy-status-chip');
-  const linkRow = document.getElementById('comfy-link-row');
-  const inactiveCtrl = document.getElementById('comfy-inactive-controls');
-  const activeCtrl = document.getElementById('comfy-active-controls');
-
-  if (mode === 'comfy' && comfyRunning) {
-    chipEl.innerHTML = '<span class="status-chip chip-comfy">● Activo</span>';
-    linkRow.style.display = 'block';
-    const comfyUrl = 'http://' + serverHost + ':8188';
-    document.getElementById('comfy-link').href = comfyUrl;
-    document.getElementById('comfy-link').textContent = '🔗 Abrir ComfyUI → ' + comfyUrl;
-    document.getElementById('comfy-expires').textContent = lease?.expires_at ? new Date(lease.expires_at).toLocaleTimeString() : 'sin límite';
-    inactiveCtrl.style.display = 'none';
-    activeCtrl.style.display = 'block';
-  } else if (comfyTransition) {
-    chipEl.innerHTML = '<span class="status-chip chip-loading">⏳ Cambiando…</span>';
-    linkRow.style.display = 'none';
-    inactiveCtrl.style.display = 'none';
-    activeCtrl.style.display = 'none';
+  if (previous && models.some(m => m.id === previous)) {
+    select.value = previous;
+  } else if (statusData?.active_model && models.some(m => m.id === statusData.active_model)) {
+    select.value = statusData.active_model;
   } else {
-    chipEl.innerHTML = '<span class="status-chip chip-stopped">○ Inactivo</span>';
-    linkRow.style.display = 'none';
-    inactiveCtrl.style.display = 'flex';
-    activeCtrl.style.display = 'none';
+    select.value = models[0]?.id || '';
   }
 }
 
@@ -1496,7 +1498,9 @@ async function switchToModel(model) {
 }
 
 async function activateComfy() {
-  const ttl = parseInt(document.getElementById('ttl-select').value, 10);
+  const ttlEl = document.getElementById('ttl-select');
+  if (!ttlEl) return showToast('err', 'Control TTL no disponible');
+  const ttl = parseInt(ttlEl.value, 10);
   pendingModeTarget = 'comfy';
   showToast('info', 'Activando ComfyUI (' + ttl + ' min)…');
   try {
@@ -1514,7 +1518,9 @@ async function activateComfy() {
 }
 
 async function deactivateComfy() {
-  const model = document.getElementById('return-model-select').value;
+  const selectEl = document.getElementById('return-model-select');
+  if (!selectEl) return showToast('err', 'Selector de modelo no disponible');
+  const model = selectEl.value;
   pendingModeTarget = 'llm';
   showToast('info', 'Volviendo a LLM (' + model + ')…');
   try {
