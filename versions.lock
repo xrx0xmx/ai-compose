@@ -2,7 +2,7 @@
 # Keep this file committed and versioned. Use explicit tags when possible.
 
 POSTGRES_IMAGE=postgres:16-alpine
-LITELLM_IMAGE=litellm/litellm:main-stable
+LITELLM_IMAGE=litellm/litellm:latest
 OPENWEBUI_IMAGE=ghcr.io/open-webui/open-webui:main
 DOCKER_SOCKET_PROXY_IMAGE=tecnativa/docker-socket-proxy:0.1.1
 
