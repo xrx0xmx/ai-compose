@@ -28,6 +28,15 @@ timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 if [[ -z "$TEST_DYNAMIC_MODEL_ID" ]]; then
   TEST_DYNAMIC_MODEL_ID="auto-test-qwen25-3b-awq-$timestamp"
 fi
+
+normalize_model_id() {
+  printf '%s' "$1" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9-]+/-/g; s/-+/-/g; s/^-+//; s/-+$//'
+}
+
+TEST_DYNAMIC_MODEL_ID="$(normalize_model_id "$TEST_DYNAMIC_MODEL_ID")"
+
 log_file="$ARTIFACT_DIR/prod-test-auto-$timestamp.log"
 json_file="$ARTIFACT_DIR/prod-test-auto-$timestamp.json"
 results_tmp="$(mktemp)"
@@ -202,7 +211,7 @@ run_step "mode_comfy_off" "strict" "MODEL_SWITCHER_TOKEN='$MODEL_SWITCHER_TOKEN'
 run_step "mode_back_to_llm" "strict" "MODEL_SWITCHER_TOKEN='$MODEL_SWITCHER_TOKEN' API_KEY='$LITELLM_KEY' make prod-test"
 
 if [[ "$EXTENSIVE" == "1" ]]; then
-  BAD_MODEL_ID="auto-test-invalid-model"
+  BAD_MODEL_ID="$(normalize_model_id "auto-test-invalid-model")"
   BAD_HF_URL="https://huggingface.co/this-model/does-not-exist"
   echo "[STEP] rollback_drill_register_invalid"
   if MODEL_SWITCHER_TOKEN="$MODEL_SWITCHER_TOKEN" HF_URL="$BAD_HF_URL" MODEL_ID="$BAD_MODEL_ID" make prod-register-model >/tmp/prod_bad_register.out 2>&1; then
