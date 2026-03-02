@@ -7,6 +7,8 @@ SWITCHER_TOKEN := $(or $(SWITCHER_TOKEN),change_me)
 SWITCHER_URL ?= http://127.0.0.1:9000
 API_KEY ?= $(or $(LITELLM_KEY),cambiaLAclave)
 MODEL ?= qwen-fast
+HF_URL ?=
+MODEL_ID ?=
 COMFY_TTL ?= 45
 TAIL ?= 200
 SERVICE ?=
@@ -28,7 +30,8 @@ help:
 	@echo "  make prod-pull                  # actualiza imagenes"
 	@echo ""
 	@echo "Control de modo/modelo:"
-	@echo "  make prod-switch MODEL=qwen-fast|qwen-quality|deepseek|qwen-max"
+	@echo "  make prod-switch MODEL=<id-en-/models>"
+	@echo "  make prod-register-model HF_URL=https://huggingface.co/org/repo MODEL_ID=opcional"
 	@echo "  make prod-comfy-on COMFY_TTL=45"
 	@echo "  make prod-comfy-on-safe COMFY_TTL=45"
 	@echo "  make prod-comfy-off MODEL=qwen-fast"
@@ -60,6 +63,10 @@ prod-restart:          ; $(PROD) restart
 # --- Control API model-switcher ---
 prod-switch:       ; curl -s $(SWITCHER_URL)/switch -H "Authorization: Bearer $(SWITCHER_TOKEN)" -H "Content-Type: application/json" -d '{"model":"$(MODEL)"}' | jq
 prod-switch-async: ; curl -s $(SWITCHER_URL)/switch -H "Authorization: Bearer $(SWITCHER_TOKEN)" -H "Content-Type: application/json" -d '{"model":"$(MODEL)","wait_for_ready":false}' | jq
+prod-register-model:
+	@test -n "$(HF_URL)" || { echo "ERROR: define HF_URL=https://huggingface.co/org/repo"; exit 1; }
+	@BODY=$$(jq -n --arg url "$(HF_URL)" --arg model_id "$(MODEL_ID)" 'if ($$model_id|length) > 0 then {huggingface_url: $$url, model_id: $$model_id} else {huggingface_url: $$url} end'); \
+	curl -s $(SWITCHER_URL)/models/register -H "Authorization: Bearer $(SWITCHER_TOKEN)" -H "Content-Type: application/json" -d "$$BODY" | jq
 prod-status:       ; curl -s $(SWITCHER_URL)/status -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
 prod-mode-status:  ; curl -s $(SWITCHER_URL)/mode -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
 prod-admin-url:    ; @echo "$(SWITCHER_URL)/admin"
@@ -161,5 +168,5 @@ prod-logs-%:
 
 .PHONY: help \
         prod-init prod-up prod-build-switcher prod-bootstrap-models prod-down prod-ps prod-pull prod-restart \
-        prod-switch prod-switch-async prod-status prod-mode-status prod-admin-url prod-list-models prod-stop-models prod-comfy-on prod-comfy-off prod-comfy-on-safe prod-llm-priority prod-gpu-preflight prod-test \
+        prod-switch prod-switch-async prod-register-model prod-status prod-mode-status prod-admin-url prod-list-models prod-stop-models prod-comfy-on prod-comfy-off prod-comfy-on-safe prod-llm-priority prod-gpu-preflight prod-test \
         prod-logs-list prod-logs-all prod-logs prod-logs-%

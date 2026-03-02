@@ -161,6 +161,7 @@ MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-status
 
 ```bash
 MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-list-models
+MODEL_SWITCHER_TOKEN=tu_token_seguro HF_URL=https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-AWQ make prod-register-model
 MODEL_SWITCHER_TOKEN=tu_token_seguro MODEL=qwen-fast make prod-switch
 MODEL_SWITCHER_TOKEN=tu_token_seguro MODEL=qwen-fast make prod-switch-async
 MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-status
@@ -174,12 +175,18 @@ make prod-admin-url
 - `GET /healthz/ready` (solo `ready` cuando el modo activo es `llm`)
 - `GET /admin` (UI minima para operaciones de modo)
 - `GET /models`
+- `POST /models/register` body: `{"huggingface_url":"https://huggingface.co/org/repo","model_id":"opcional","litellm_model":"opcional","quantization":"opcional","gpu_memory_utilization":0.9,"max_model_len":4096,"max_num_seqs":1}`
 - `GET /status`
 - `GET /mode`
-- `POST /switch` body: `{"model":"qwen-fast|qwen-quality|deepseek|qwen-max","wait_for_ready":true|false}`
-- `POST /mode/switch` body: `{"mode":"llm|comfy","model":"qwen-fast|qwen-quality|deepseek|qwen-max"(solo llm),"ttl_minutes":45(solo comfy),"wait_for_ready":true|false}`
+- `POST /switch` body: `{"model":"<id-en-/models>","wait_for_ready":true|false}`
+- `POST /mode/switch` body: `{"mode":"llm|comfy","model":"<id-en-/models>"(solo llm),"ttl_minutes":45(solo comfy),"wait_for_ready":true|false}`
 - `POST /mode/release`
 - `POST /stop`
+
+`POST /models/register`:
+- acepta URL de Hugging Face (`huggingface.co/org/repo` o `org/repo`)
+- genera template LiteLLM automáticamente
+- registra el modelo en el switcher y crea contenedor vLLM dinámico on-demand
 
 `POST /switch`:
 - `wait_for_ready=true` (default): respuesta bloqueante hasta éxito/error con estado final.

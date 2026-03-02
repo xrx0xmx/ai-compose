@@ -1,8 +1,11 @@
 import os
+import json
+import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote, urlparse
 
 import requests
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -26,8 +29,15 @@ ACTIVE_CONFIG = os.path.join(CONFIG_DIR, "active.yml")
 ACTIVE_MODEL_FILE = os.path.join(CONFIG_DIR, "active.model")
 ACTIVE_MODE_FILE = os.path.join(CONFIG_DIR, "active.mode")
 ACTIVE_COMFY_LEASE_FILE = os.path.join(CONFIG_DIR, "active.mode.lease_until")
+MODEL_REGISTRY_FILE = os.path.join(CONFIG_DIR, "models.registry.json")
+DYNAMIC_TEMPLATE_DIR = os.path.join(CONFIG_DIR, "model-templates")
+DOCKER_DEFAULT_NETWORK = os.getenv("MODEL_SWITCHER_DOCKER_NETWORK", "ai_default")
+HF_CACHE_HOST_PATH = os.getenv("MODEL_SWITCHER_HF_CACHE_HOST_PATH", "/opt/ai/hf-cache")
+HF_CACHE_CONTAINER_PATH = os.getenv("MODEL_SWITCHER_HF_CACHE_CONTAINER_PATH", "/data/hf-cache")
+DYNAMIC_VLLM_IMAGE = os.getenv("MODEL_SWITCHER_DYNAMIC_VLLM_IMAGE", "vllm/vllm-openai:v0.6.6.post1")
+DYNAMIC_VLLM_DTYPE = os.getenv("MODEL_SWITCHER_DYNAMIC_DTYPE", "half")
 
-MODELS: Dict[str, Dict[str, str]] = {
+BASE_MODELS: Dict[str, Dict[str, Any]] = {
   "qwen-fast": {
     "container": "vllm-fast",
     "template": "qwen-fast.yml",
@@ -49,6 +59,7 @@ MODELS: Dict[str, Dict[str, str]] = {
     "litellm_model": "qwen-max",
   },
 }
+MODELS: Dict[str, Dict[str, Any]] = dict(BASE_MODELS)
 
 LITELLM_CONTAINER = "litellm"
 COMFY_CONTAINER = os.getenv("MODEL_SWITCHER_COMFY_CONTAINER", "comfyui")
@@ -61,7 +72,7 @@ MODE_MONITOR_POLL_SECONDS = int(os.getenv("MODEL_SWITCHER_MODE_POLL_INTERVAL_SEC
 FINAL_SWITCH_STATES = {"success", "failed", "rolled_back"}
 UNSET = object()
 
-app = FastAPI(title="AI Model Switcher", version="2.3.0")
+app = FastAPI(title="AI Model Switcher", version="2.4.0")
 
 SWITCH_LOCK = threading.Lock()
 STATE_LOCK = threading.Lock()
@@ -86,6 +97,16 @@ class ModeSwitchRequest(BaseModel):
   wait_for_ready: bool = True
 
 
+class RegisterHuggingFaceModelRequest(BaseModel):
+  huggingface_url: str
+  model_id: Optional[str] = None
+  litellm_model: Optional[str] = None
+  quantization: Optional[str] = None
+  gpu_memory_utilization: Optional[float] = None
+  max_model_len: Optional[int] = None
+  max_num_seqs: Optional[int] = None
+
+
 def utc_now() -> str:
   return datetime.now(timezone.utc).isoformat()
 
@@ -98,6 +119,258 @@ def require_token(authorization: Optional[str] = Header(default=None)) -> None:
   supplied = authorization.split(" ", 1)[1].strip()
   if supplied != TOKEN:
     raise HTTPException(status_code=403, detail="Invalid token")
+
+
+def env_float(name: str, fallback: float) -> float:
+  raw = os.getenv(name)
+  if raw is None:
+    return fallback
+  try:
+    return float(raw)
+  except ValueError:
+    return fallback
+
+
+def env_int(name: str, fallback: int) -> int:
+  raw = os.getenv(name)
+  if raw is None:
+    return fallback
+  try:
+    return int(raw)
+  except ValueError:
+    return fallback
+
+
+def normalize_model_id(value: str) -> str:
+  slug = re.sub(r"[^a-z0-9-]+", "-", value.strip().lower())
+  slug = re.sub(r"-{2,}", "-", slug).strip("-")
+  if not slug:
+    raise ValueError("model_id must contain at least one alphanumeric character")
+  return slug
+
+
+def parse_huggingface_repo(value: str) -> str:
+  candidate = value.strip()
+  if not candidate:
+    raise HTTPException(status_code=400, detail="huggingface_url is required")
+
+  parsed = urlparse(candidate)
+  if parsed.scheme and parsed.netloc:
+    if "huggingface.co" not in parsed.netloc.lower():
+      raise HTTPException(status_code=400, detail="only huggingface.co URLs are supported")
+    path_parts = [part for part in parsed.path.strip("/").split("/") if part]
+    if path_parts and path_parts[0] in {"models", "spaces"}:
+      path_parts = path_parts[1:]
+    if len(path_parts) < 2:
+      raise HTTPException(status_code=400, detail="invalid huggingface URL; expected /org/repo")
+    return f"{path_parts[0]}/{path_parts[1]}"
+
+  if re.match(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$", candidate):
+    return candidate
+
+  raise HTTPException(status_code=400, detail="invalid huggingface reference; use URL or org/repo")
+
+
+def quantization_for_repo(repo: str, requested: Optional[str]) -> Optional[str]:
+  if requested is not None:
+    value = requested.strip().lower()
+    return value or None
+  lowered = repo.lower()
+  if "awq" in lowered:
+    return "awq"
+  if "gptq" in lowered:
+    return "gptq"
+  return None
+
+
+def model_template_path(model_meta: Dict[str, Any]) -> str:
+  template_name = str(model_meta.get("template", "")).strip()
+  if not template_name:
+    raise RuntimeError("template name is missing")
+  if os.path.isabs(template_name):
+    return template_name
+  if model_meta.get("dynamic"):
+    return os.path.join(DYNAMIC_TEMPLATE_DIR, template_name)
+  return os.path.join(TEMPLATE_DIR, template_name)
+
+
+def render_litellm_template(*, litellm_model: str, hf_repo: str, container_name: str) -> str:
+  return (
+    "model_list:\n"
+    f"  - model_name: {litellm_model}\n"
+    "    litellm_params:\n"
+    f"      model: openai/{hf_repo}\n"
+    f"      api_base: http://{container_name}:8000/v1\n"
+    "      api_key: EMPTY\n"
+    "\n"
+    "general_settings:\n"
+    "  master_key: \"cambiaLAclave\"\n"
+    "  database_url: \"os.environ/DATABASE_URL\"\n"
+  )
+
+
+def read_registry() -> Dict[str, Any]:
+  raw = read_optional_text(MODEL_REGISTRY_FILE)
+  if raw is None:
+    return {"version": 1, "models": []}
+  try:
+    payload = json.loads(raw)
+  except json.JSONDecodeError:
+    return {"version": 1, "models": []}
+  if not isinstance(payload, dict):
+    return {"version": 1, "models": []}
+  models = payload.get("models")
+  if not isinstance(models, list):
+    payload["models"] = []
+  if "version" not in payload:
+    payload["version"] = 1
+  return payload
+
+
+def write_registry(payload: Dict[str, Any]) -> None:
+  os.makedirs(CONFIG_DIR, exist_ok=True)
+  content = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+  write_text(MODEL_REGISTRY_FILE, content)
+
+
+def load_dynamic_models() -> Dict[str, Dict[str, Any]]:
+  payload = read_registry()
+  dynamic: Dict[str, Dict[str, Any]] = {}
+  for item in payload.get("models", []):
+    if not isinstance(item, dict):
+      continue
+    model_id = item.get("id")
+    container = item.get("container")
+    template = item.get("template")
+    litellm_model = item.get("litellm_model")
+    hf_repo = item.get("hf_repo")
+    if not all(isinstance(value, str) and value.strip() for value in [model_id, container, template, litellm_model, hf_repo]):
+      continue
+
+    try:
+      normalized_id = normalize_model_id(model_id)
+    except ValueError:
+      continue
+    if normalized_id in BASE_MODELS:
+      continue
+
+    try:
+      gpu_memory_utilization = float(item.get("gpu_memory_utilization") or env_float("MODEL_SWITCHER_DYNAMIC_GPU_MEMORY_UTILIZATION", 0.90))
+      max_model_len = int(item.get("max_model_len") or env_int("MODEL_SWITCHER_DYNAMIC_MAX_MODEL_LEN", 4096))
+      max_num_seqs = int(item.get("max_num_seqs") or env_int("MODEL_SWITCHER_DYNAMIC_MAX_NUM_SEQS", 1))
+    except (TypeError, ValueError):
+      continue
+
+    dynamic[normalized_id] = {
+      "container": container.strip(),
+      "template": template.strip(),
+      "litellm_model": litellm_model.strip(),
+      "hf_repo": hf_repo.strip(),
+      "dynamic": True,
+      "vllm_image": str(item.get("vllm_image") or DYNAMIC_VLLM_IMAGE),
+      "dtype": str(item.get("dtype") or DYNAMIC_VLLM_DTYPE),
+      "quantization": item.get("quantization"),
+      "gpu_memory_utilization": gpu_memory_utilization,
+      "max_model_len": max_model_len,
+      "max_num_seqs": max_num_seqs,
+    }
+  return dynamic
+
+
+def reload_models_registry() -> None:
+  global MODELS
+  combined = dict(BASE_MODELS)
+  combined.update(load_dynamic_models())
+  MODELS = combined
+
+
+def persist_dynamic_model(model_id: str, model_meta: Dict[str, Any]) -> None:
+  payload = read_registry()
+  models_raw = payload.get("models", [])
+  models: List[Dict[str, Any]] = [item for item in models_raw if isinstance(item, dict)]
+
+  filtered: List[Dict[str, Any]] = []
+  for item in models:
+    try:
+      existing_id = normalize_model_id(str(item.get("id", "")))
+    except ValueError:
+      continue
+    if existing_id != model_id:
+      filtered.append(item)
+  filtered.append(
+    {
+      "id": model_id,
+      "container": model_meta["container"],
+      "template": model_meta["template"],
+      "litellm_model": model_meta["litellm_model"],
+      "hf_repo": model_meta["hf_repo"],
+      "dynamic": True,
+      "vllm_image": model_meta["vllm_image"],
+      "dtype": model_meta["dtype"],
+      "quantization": model_meta.get("quantization"),
+      "gpu_memory_utilization": model_meta["gpu_memory_utilization"],
+      "max_model_len": model_meta["max_model_len"],
+      "max_num_seqs": model_meta["max_num_seqs"],
+    }
+  )
+  payload["models"] = filtered
+  payload["version"] = 1
+  write_registry(payload)
+
+
+def build_dynamic_model(
+  req: RegisterHuggingFaceModelRequest,
+) -> Dict[str, Any]:
+  hf_repo = parse_huggingface_repo(req.huggingface_url)
+
+  try:
+    model_id = normalize_model_id(req.model_id if req.model_id else hf_repo.replace("/", "-"))
+  except ValueError as exc:
+    raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+  if model_id in BASE_MODELS:
+    raise HTTPException(status_code=409, detail=f"model id '{model_id}' is reserved by a built-in model")
+  if model_id in MODELS:
+    raise HTTPException(status_code=409, detail=f"model id '{model_id}' already exists")
+
+  litellm_model = req.litellm_model.strip() if req.litellm_model else model_id
+  if not litellm_model:
+    raise HTTPException(status_code=400, detail="litellm_model cannot be empty")
+
+  gpu_memory = req.gpu_memory_utilization
+  if gpu_memory is None:
+    gpu_memory = env_float("MODEL_SWITCHER_DYNAMIC_GPU_MEMORY_UTILIZATION", 0.90)
+  if gpu_memory <= 0 or gpu_memory > 0.99:
+    raise HTTPException(status_code=400, detail="gpu_memory_utilization must be > 0 and <= 0.99")
+
+  max_model_len = req.max_model_len
+  if max_model_len is None:
+    max_model_len = env_int("MODEL_SWITCHER_DYNAMIC_MAX_MODEL_LEN", 4096)
+  if max_model_len <= 0:
+    raise HTTPException(status_code=400, detail="max_model_len must be > 0")
+
+  max_num_seqs = req.max_num_seqs
+  if max_num_seqs is None:
+    max_num_seqs = env_int("MODEL_SWITCHER_DYNAMIC_MAX_NUM_SEQS", 1)
+  if max_num_seqs <= 0:
+    raise HTTPException(status_code=400, detail="max_num_seqs must be > 0")
+
+  template_name = f"{model_id}.yml"
+  quantization = quantization_for_repo(hf_repo, req.quantization)
+  return {
+    "id": model_id,
+    "container": f"vllm-{model_id}",
+    "template": template_name,
+    "litellm_model": litellm_model,
+    "hf_repo": hf_repo,
+    "dynamic": True,
+    "vllm_image": DYNAMIC_VLLM_IMAGE,
+    "dtype": DYNAMIC_VLLM_DTYPE,
+    "quantization": quantization,
+    "gpu_memory_utilization": float(gpu_memory),
+    "max_model_len": int(max_model_len),
+    "max_num_seqs": int(max_num_seqs),
+  }
 
 
 def set_runtime_state(*, last_error: Optional[str] = None, clear_error: bool = False) -> None:
@@ -237,11 +510,17 @@ def update_switch_state(
     CURRENT_SWITCH["updated_at"] = now
 
 
-def docker_request(method: str, path: str, *, timeout: Optional[float] = None) -> requests.Response:
+def docker_request(
+  method: str,
+  path: str,
+  *,
+  timeout: Optional[float] = None,
+  json_body: Optional[Dict[str, Any]] = None,
+) -> requests.Response:
   url = f"{DOCKER_PROXY_URL}{path}"
   effective_timeout = timeout if timeout is not None else DOCKER_TIMEOUT_SECONDS
   try:
-    return requests.request(method, url, timeout=effective_timeout)
+    return requests.request(method, url, timeout=effective_timeout, json=json_body)
   except requests.RequestException as exc:
     raise RuntimeError(str(exc)) from exc
 
@@ -269,6 +548,13 @@ def container_stop(name: str) -> None:
   if resp.status_code in (204, 304):
     return
   if resp.status_code == 404:
+    return
+  raise RuntimeError(f"docker error: {resp.text}")
+
+
+def container_create(name: str, spec: Dict[str, Any]) -> None:
+  resp = docker_request("POST", f"/containers/create?name={quote(name, safe='')}", json_body=spec)
+  if resp.status_code in (201, 409):
     return
   raise RuntimeError(f"docker error: {resp.text}")
 
@@ -393,8 +679,9 @@ def litellm_model_for_internal(model_id: Optional[str]) -> Optional[str]:
 
 def ensure_active_config(model: str) -> None:
   os.makedirs(CONFIG_DIR, exist_ok=True)
-  template_name = MODELS[model]["template"]
-  template_path = os.path.join(TEMPLATE_DIR, template_name)
+  model_meta = MODELS[model]
+  template_name = str(model_meta["template"])
+  template_path = model_template_path(model_meta)
   if not os.path.isfile(template_path):
     raise RuntimeError(f"template not found: {template_name}")
 
@@ -515,7 +802,59 @@ def stop_all_model_containers() -> None:
     container_stop(meta["container"])
 
 
-def ensure_container_created(name: str, bootstrap_target: str) -> None:
+def dynamic_container_spec(model_meta: Dict[str, Any]) -> Dict[str, Any]:
+  quantization = str(model_meta.get("quantization") or "").strip()
+  command: List[str] = [
+    "--model", str(model_meta["hf_repo"]),
+    "--host", "0.0.0.0",
+    "--port", "8000",
+    "--dtype", str(model_meta["dtype"]),
+    "--max-model-len", str(model_meta["max_model_len"]),
+    "--gpu-memory-utilization", str(model_meta["gpu_memory_utilization"]),
+    "--max-num-seqs", str(model_meta["max_num_seqs"]),
+  ]
+  if quantization:
+    command.extend(["--quantization", quantization])
+
+  return {
+    "Image": str(model_meta.get("vllm_image") or DYNAMIC_VLLM_IMAGE),
+    "Cmd": command,
+    "Env": [
+      f"HUGGING_FACE_HUB_CACHE={HF_CACHE_CONTAINER_PATH}",
+    ],
+    "HostConfig": {
+      "Runtime": "nvidia",
+      "Binds": [f"{HF_CACHE_HOST_PATH}:{HF_CACHE_CONTAINER_PATH}"],
+      "RestartPolicy": {"Name": "unless-stopped"},
+    },
+    "NetworkingConfig": {
+      "EndpointsConfig": {
+        DOCKER_DEFAULT_NETWORK: {}
+      }
+    },
+  }
+
+
+def ensure_model_container_created(model_id: str) -> None:
+  model_meta = MODELS[model_id]
+  container_name = str(model_meta["container"])
+  if container_json(container_name) is not None:
+    return
+
+  if not model_meta.get("dynamic"):
+    raise HTTPException(
+      status_code=412,
+      detail=(
+        f"target container is not created: {container_name}. "
+        "Run make prod-bootstrap-models first."
+      ),
+    )
+
+  spec = dynamic_container_spec(model_meta)
+  container_create(container_name, spec)
+
+
+def ensure_container_exists(name: str, bootstrap_target: str) -> None:
   if container_json(name) is None:
     raise HTTPException(
       status_code=412,
@@ -699,7 +1038,7 @@ def run_switch_pipeline(model: str, switch_id: int, *, raise_http_errors: bool) 
 
   try:
     target_container = MODELS[model]["container"]
-    ensure_container_created(target_container, "prod-bootstrap-models")
+    ensure_model_container_created(model)
     add_step(
       steps,
       "preflight",
@@ -1236,7 +1575,7 @@ def run_mode_switch_pipeline(
   )
 
   try:
-    ensure_container_created(COMFY_CONTAINER, "prod-bootstrap-models")
+    ensure_container_exists(COMFY_CONTAINER, "prod-bootstrap-models")
     add_step(
       steps,
       "preflight",
@@ -1784,6 +2123,8 @@ def startup_init_mode() -> None:
   global MODE_MONITOR_THREAD
 
   os.makedirs(CONFIG_DIR, exist_ok=True)
+  os.makedirs(DYNAMIC_TEMPLATE_DIR, exist_ok=True)
+  reload_models_registry()
   if read_optional_text(ACTIVE_MODE_FILE) is None:
     set_active_mode(MODE_LLM)
   elif active_mode() != MODE_COMFY:
@@ -1811,6 +2152,9 @@ def health() -> Dict[str, str]:
 
 @app.get("/admin", response_class=HTMLResponse)
 def admin() -> HTMLResponse:
+  model_options_html = "\n".join(
+    [f'          <option value="{model_id}">{model_id}</option>' for model_id in sorted(MODELS.keys())]
+  )
   return HTMLResponse(
     content="""<!doctype html>
 <html lang="es">
@@ -1933,15 +2277,21 @@ def admin() -> HTMLResponse:
         <button id="refresh">Refrescar estado</button>
         <button id="modeComfy" class="warn">Activar Comfy (45m)</button>
         <select id="llmModel">
-          <option value="qwen-fast">qwen-fast</option>
-          <option value="qwen-quality">qwen-quality</option>
-          <option value="deepseek">deepseek</option>
-          <option value="qwen-max">qwen-max</option>
+__MODEL_OPTIONS__
         </select>
         <button id="modeLlm" class="primary">Volver a LLM</button>
         <button id="release" class="danger">Preemption LLM</button>
       </div>
       <p class="hint">`Preemption LLM` fuerza la salida de comfy y restaura el modo llm por prioridad operativa.</p>
+    </section>
+
+    <section class="card">
+      <div class="row">
+        <input id="hfUrl" type="text" placeholder="https://huggingface.co/org/repo">
+        <input id="hfModelId" type="text" placeholder="model-id (opcional)">
+        <button id="registerModel" class="primary">Registrar modelo HF</button>
+      </div>
+      <p class="hint">Crea template LiteLLM, registra modelo dinámico y prepara su contenedor vLLM.</p>
     </section>
 
     <section class="card">
@@ -2022,6 +2372,19 @@ def admin() -> HTMLResponse:
       await refresh();
     }
 
+    async function registerModelFromHF() {
+      const huggingface_url = document.getElementById("hfUrl").value.trim();
+      const model_id_raw = document.getElementById("hfModelId").value.trim();
+      if (!huggingface_url) {
+        throw new Error("URL de Hugging Face requerida");
+      }
+      const body = { huggingface_url };
+      if (model_id_raw) body.model_id = model_id_raw;
+      const payload = await api("POST", "/models/register", body);
+      outputEl.textContent = JSON.stringify(payload, null, 2);
+      window.location.reload();
+    }
+
     document.getElementById("saveToken").addEventListener("click", () => {
       window.localStorage.setItem(LS_KEY, tokenInput.value.trim());
       refresh();
@@ -2030,12 +2393,13 @@ def admin() -> HTMLResponse:
     document.getElementById("modeComfy").addEventListener("click", () => switchComfy().catch((e) => { outputEl.textContent = String(e); }));
     document.getElementById("modeLlm").addEventListener("click", () => switchLlm().catch((e) => { outputEl.textContent = String(e); }));
     document.getElementById("release").addEventListener("click", () => releaseLlm().catch((e) => { outputEl.textContent = String(e); }));
+    document.getElementById("registerModel").addEventListener("click", () => registerModelFromHF().catch((e) => { outputEl.textContent = String(e); }));
 
     refresh();
     setInterval(refresh, 5000);
   </script>
 </body>
-</html>"""
+</html>""".replace("__MODEL_OPTIONS__", model_options_html)
   )
 
 
@@ -2066,9 +2430,72 @@ def models() -> Dict[str, Any]:
         "container": meta["container"],
         "template": meta["template"],
         "litellm_model": meta["litellm_model"],
+        "hf_repo": meta.get("hf_repo"),
+        "dynamic": bool(meta.get("dynamic", False)),
       }
       for model_id, meta in MODELS.items()
     ]
+  }
+
+
+@app.post("/models/register", dependencies=[Depends(require_token)])
+def register_huggingface_model(req: RegisterHuggingFaceModelRequest) -> Dict[str, Any]:
+  model_meta = build_dynamic_model(req)
+  model_id = str(model_meta["id"])
+
+  os.makedirs(DYNAMIC_TEMPLATE_DIR, exist_ok=True)
+  template_path = os.path.join(DYNAMIC_TEMPLATE_DIR, str(model_meta["template"]))
+  template_content = render_litellm_template(
+    litellm_model=str(model_meta["litellm_model"]),
+    hf_repo=str(model_meta["hf_repo"]),
+    container_name=str(model_meta["container"]),
+  )
+  write_text(template_path, template_content)
+
+  global MODELS
+  previous_models = MODELS
+  try:
+    persist_dynamic_model(model_id, model_meta)
+    updated_models = dict(MODELS)
+    updated_models[model_id] = model_meta
+    MODELS = updated_models
+    ensure_model_container_created(model_id)
+  except Exception as exc:
+    try:
+      payload = read_registry()
+      models_raw = payload.get("models", [])
+      models = [item for item in models_raw if isinstance(item, dict)]
+      filtered: List[Dict[str, Any]] = []
+      for item in models:
+        try:
+          existing_id = normalize_model_id(str(item.get("id", "")))
+        except ValueError:
+          continue
+        if existing_id != model_id:
+          filtered.append(item)
+      payload["models"] = filtered
+      payload["version"] = 1
+      write_registry(payload)
+    except Exception:
+      pass
+    MODELS = previous_models
+    remove_file(template_path)
+    raise HTTPException(status_code=500, detail=f"failed to register model: {exc}") from exc
+
+  return {
+    "status": "created",
+    "model": {
+      "id": model_id,
+      "container": model_meta["container"],
+      "template": model_meta["template"],
+      "litellm_model": model_meta["litellm_model"],
+      "hf_repo": model_meta["hf_repo"],
+      "dynamic": True,
+    },
+    "next": {
+      "switch_endpoint": "/switch",
+      "payload": {"model": model_id, "wait_for_ready": True},
+    },
   }
 
 
