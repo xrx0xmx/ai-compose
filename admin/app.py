@@ -1267,7 +1267,7 @@ function renderModelGrid() {
     const isActive = Boolean(model.is_active);
     const runtime = model.runtime || {};
     const running = runtime.status === 'running' || Boolean(model.is_running);
-    const isErrored = runtime.health === 'unhealthy';
+    const isErrored = running && runtime.health === 'unhealthy';
 
     let chipClass = 'chip-stopped';
     let chipText = '○ Detenido';
