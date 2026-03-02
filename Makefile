@@ -117,13 +117,13 @@ prod-init:
 	@$(MAKE) prod-bootstrap-models
 
 prod-up:
-	@$(PROD) --profile webui up -d $(PROD_BASE_SERVICES)
-	@$(PROD) --profile webui up -d admin-panel
-prod-up-admin:         ; $(PROD) --profile webui up -d admin-panel
-prod-build-admin:      ; $(PROD) --profile webui build admin-panel && $(PROD) --profile webui up -d admin-panel
+	@$(PROD) --profile webui up -d --remove-orphans $(PROD_BASE_SERVICES)
+	@$(PROD) --profile webui up -d --remove-orphans admin-panel
+prod-up-admin:         ; $(PROD) --profile webui up -d --remove-orphans admin-panel
+prod-build-admin:      ; $(PROD) --profile webui build admin-panel && $(PROD) --profile webui up -d --remove-orphans admin-panel
 prod-build-switcher:   ; $(PROD) --profile webui build model-switcher
 prod-bootstrap-models: ; $(PROD) $(PROD_MODEL_PROFILES) create vllm-fast vllm-quality vllm-deepseek vllm-qwen32b comfyui
-prod-down:             ; $(PROD) $(PROD_ALL_PROFILES) down
+prod-down:             ; $(PROD) $(PROD_ALL_PROFILES) down --remove-orphans
 prod-ps:               ; $(PROD) $(PROD_ALL_PROFILES) ps --all
 prod-pull:             ; $(PROD) $(PROD_ALL_PROFILES) pull
 prod-restart:          ; $(PROD) --profile webui restart $(PROD_BASE_SERVICES)
