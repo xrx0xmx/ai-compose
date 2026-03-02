@@ -253,11 +253,43 @@ make prod-register-model
 - modo activo (`llm|comfy`) y lease de ComfyUI (`expires_at`, `remaining_seconds`, `expired`)
 - estado de `litellm`, `comfyui`, `running_models` y switch en curso
 
-## Publicación de ComfyUI (Nginx host)
+## Publicación reutilizable en Docker (sin puertos directos)
 
-ComfyUI se expone solo en loopback (`127.0.0.1:8188`). Publica `/comfy/` desde Nginx del host hacia ese puerto y protege con autenticación + rate limit + timeouts altos.
+El stack productivo incluye un gateway Nginx en Docker (`nginx-gateway`) que publica:
+- `/admin` -> panel admin
+- `/openwebui/` -> OpenWebUI
+- `/comfyui/` -> ComfyUI
 
-Para canal de control directo, publica tambien `http://127.0.0.1:9000/admin` detras de Nginx con auth (Basic/Auth proxy o VPN).  
+La configuración está versionada en:
+- `ops/nginx/gateway.conf`
+
+Con este diseño, `open-webui` y `comfyui` no se publican por puertos directos en host.
+
+Pasos:
+
+```bash
+make prod-down
+make prod-init
+```
+
+Validaciones rápidas:
+
+```bash
+# 3000/8188 no deben aparecer en listeners del host
+make prod-ports-check
+
+# Rutas del gateway (puerto 80)
+make prod-proxy-check PROXY_BASE_URL=http://127.0.0.1
+```
+
+Nota: `/comfyui/` puede responder `502/503` cuando ComfyUI está apagado (modo `llm`), y se considera normal.
+
+Si proteges el gateway con auth, añade:
+
+```bash
+make prod-proxy-check PROXY_BASE_URL=https://tu-dominio PROXY_USER=admin PROXY_PASS='<password>'
+```
+
 La UI `/admin` pide token `MODEL_SWITCHER_TOKEN` y usa:
 - `POST /mode/switch` para `llm|comfy`
 - `POST /mode/release` para preemption inmediata a LLM
@@ -265,7 +297,7 @@ La UI `/admin` pide token `MODEL_SWITCHER_TOKEN` y usa:
 - Logs integrados en `Estado` (seleccion de contenedor + auto refresh)
 - `Data` muestra solo agregados anonimos (`tokens`, `chats`, `usuarios`, `mensajes`)
 
-Para habilitar metricas de tokens en `Data`, define `LITELLM_KEY` (si LiteLLM protege `/metrics`).
+Para habilitar métricas de tokens en `Data`, define `LITELLM_KEY` (si LiteLLM protege `/metrics`).
 
 ## Runbook de recuperación rápida
 
@@ -329,7 +361,7 @@ make prod-test
 
 `prod-test` autodetecta el modo activo:
 - En `llm`, ejecuta `POST /v1/chat/completions` contra LiteLLM con `active_litellm_model` (o fallback por mapeo `/models`).
-- En `comfy`, ejecuta `GET /system_stats` contra ComfyUI.
+- En `comfy`, ejecuta `GET /comfyui/system_stats` a través del gateway (`PROXY_BASE_URL`, default `http://127.0.0.1`).
 
 En ambos casos imprime la llamada que ha usado para verificar.
 

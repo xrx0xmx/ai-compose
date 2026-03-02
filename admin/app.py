@@ -1391,7 +1391,6 @@ let dataTimer = null;
 let logTimer = null;
 let logsBootstrapped = false;
 let pendingModeTarget = null;
-const serverHost = window.location.hostname;
 
 window.addEventListener('DOMContentLoaded', () => {
   const langSelect = document.getElementById('lang-select');
@@ -1617,7 +1616,7 @@ function renderModelGrid() {
   const models = aiModelsData?.models || [];
   const activeMode = aiModelsData?.active_mode || statusData?.mode?.active || statusData?.active_mode;
   const switchInProgress = Boolean(aiModelsData?.switch_in_progress || statusData?.switch_in_progress);
-  const webuiUrl = 'http://' + serverHost + ':3000';
+  const webuiUrl = '/openwebui/';
 
   models.forEach(model => {
     const isActive = Boolean(model.is_active);
@@ -1667,7 +1666,7 @@ function renderModelGrid() {
   const comfyRunning = statusData?.comfyui?.status === 'running' || aiModelsData?.comfyui?.status === 'running';
   const lease = statusData?.mode?.lease || aiModelsData?.mode?.lease;
   const comfyTransition = switchInProgress && (pendingModeTarget === 'comfy' || mode === 'comfy');
-  const comfyUrl = 'http://' + serverHost + ':8188';
+  const comfyUrl = '/comfyui/';
   const ttlOptions = ['15', '30', '45', '60', '90']
     .map(v => `<option value="${v}" ${previousTtl === v ? 'selected' : ''}>${v} min</option>`)
     .join('');

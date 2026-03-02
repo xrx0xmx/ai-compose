@@ -30,6 +30,6 @@ services:
 
   open-webui:
     ports:
-      - "3000:8080"
+      - "127.0.0.1:3000:8080"
     volumes:
       - ./data/openwebui:/app/backend/data

@@ -27,6 +27,9 @@ CONTAINER ?=
 ROLLBACK_REF ?=
 ARTIFACT_DIR ?=
 EXTENSIVE ?= 0
+PROXY_BASE_URL ?= http://127.0.0.1
+PROXY_USER ?=
+PROXY_PASS ?=
 
 -include Makefile.ops
 -include versions.lock
@@ -86,7 +89,11 @@ help:
 	@echo "  make prod-status | make prod-mode-status"
 	@echo "  make prod-test                 # prueba unica; decide llamada segun modo activo"
 	@echo "  make prod-test-auto [EXTENSIVE=1]    # bateria automatica PASS/FAIL"
-	@echo "  make prod-admin-url            # URL del panel /admin de model-switcher"
+	@echo "  make prod-ports-check          # valida que 3000/8188 NO esten publicados en host"
+	@echo "  make prod-proxy-check [PROXY_BASE_URL=http://127.0.0.1] [PROXY_USER=admin PROXY_PASS=...]"
+	@echo "  make prod-admin-url            # URL del panel admin (gateway)"
+	@echo "  make prod-openwebui-url        # URL de OpenWebUI via gateway"
+	@echo "  make prod-comfyui-url          # URL de ComfyUI via gateway"
 	@echo ""
 	@echo "Upgrade:"
 	@echo "  make prod-upgrade-precheck"
@@ -158,7 +165,9 @@ prod-unregister-model:
 	@curl -s -X DELETE $(SWITCHER_URL)/models/$(MODEL) -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
 prod-status:       ; curl -s $(SWITCHER_URL)/status -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
 prod-mode-status:  ; curl -s $(SWITCHER_URL)/mode -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
-prod-admin-url:    ; @echo "$(SWITCHER_URL)/admin"
+prod-admin-url:    ; @echo "$(PROXY_BASE_URL)/admin"
+prod-openwebui-url:; @echo "$(PROXY_BASE_URL)/openwebui/"
+prod-comfyui-url:  ; @echo "$(PROXY_BASE_URL)/comfyui/"
 prod-list-models:  ; curl -s $(SWITCHER_URL)/models -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
 prod-stop-models:  ; curl -s $(SWITCHER_URL)/stop -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
 prod-comfy-on:     ; curl -s $(SWITCHER_URL)/mode/switch -H "Authorization: Bearer $(SWITCHER_TOKEN)" -H "Content-Type: application/json" -d '{"mode":"comfy","ttl_minutes":$(COMFY_TTL)}' | jq
@@ -248,8 +257,13 @@ prod-test:
 	    | jq -e '.choices[0].message.content' >/dev/null; \
 	  echo "OK: LiteLLM/vLLM responde con $$MODEL_LITELLM"; \
 	elif [ "$$MODE" = "comfy" ]; then \
-	  echo "Llamada usada: GET http://127.0.0.1:8188/system_stats"; \
-	  curl -sf http://127.0.0.1:8188/system_stats | jq -e '.' >/dev/null; \
+	  COMFY_STATS_URL="$(PROXY_BASE_URL)/comfyui/system_stats"; \
+	  echo "Llamada usada: GET $$COMFY_STATS_URL"; \
+	  if [ -n "$(PROXY_USER)" ] && [ -n "$(PROXY_PASS)" ]; then \
+	    curl -sf -u "$(PROXY_USER):$(PROXY_PASS)" "$$COMFY_STATS_URL" | jq -e '.' >/dev/null; \
+	  else \
+	    curl -sf "$$COMFY_STATS_URL" | jq -e '.' >/dev/null; \
+	  fi; \
 	  echo "OK: ComfyUI responde"; \
 	else \
 	  echo "ERROR: modo desconocido '$$MODE'"; exit 1; \
@@ -266,6 +280,37 @@ prod-test-auto:
 
 prod-test-auto-ext:
 	@$(MAKE) prod-test-auto EXTENSIVE=1
+
+prod-ports-check:
+	@command -v ss >/dev/null 2>&1 || { echo "ERROR: 'ss' no disponible"; exit 1; }
+	@LINES=$$(ss -ltn | awk 'NR>1 {print $$4}' | grep -E '(:3000|:8188)$$' || true); \
+	if [ -n "$$LINES" ]; then \
+	  echo "ERROR: 3000/8188 estan publicados en host y deben quedar ocultos"; \
+	  printf "%s\n" "$$LINES"; \
+	  exit 1; \
+	fi; \
+	echo "OK: 3000/8188 no estan publicados en host"
+
+prod-proxy-check:
+	@set -e; \
+	for PATH_SUFFIX in /openwebui/ /comfyui/; do \
+	  URL="$(PROXY_BASE_URL)$$PATH_SUFFIX"; \
+	  if [ -n "$(PROXY_USER)" ] && [ -n "$(PROXY_PASS)" ]; then \
+	    CODE=$$(curl -k -s -o /dev/null -w '%{http_code}' -u "$(PROXY_USER):$(PROXY_PASS)" "$$URL"); \
+	    case "$$CODE" in \
+	      200|301|302|307|308) echo "OK: $$URL (auth) -> $$CODE" ;; \
+	      502|503) if [ "$$PATH_SUFFIX" = "/comfyui/" ]; then echo "OK: $$URL (auth) -> $$CODE (comfyui no activo)"; else echo "ERROR: $$URL (auth) -> $$CODE"; exit 1; fi ;; \
+	      *) echo "ERROR: $$URL (auth) -> $$CODE"; exit 1 ;; \
+	    esac; \
+	  else \
+	    CODE=$$(curl -k -s -o /dev/null -w '%{http_code}' "$$URL"); \
+	    case "$$CODE" in \
+	      200|301|302|307|308|401|403) echo "OK: $$URL -> $$CODE" ;; \
+	      502|503) if [ "$$PATH_SUFFIX" = "/comfyui/" ]; then echo "OK: $$URL -> $$CODE (comfyui no activo)"; else echo "ERROR: $$URL respuesta inesperada $$CODE"; exit 1; fi ;; \
+	      *) echo "ERROR: $$URL respuesta inesperada $$CODE"; exit 1 ;; \
+	    esac; \
+	  fi; \
+	done
 
 # --- Logs ---
 prod-logs-list:
@@ -301,6 +346,6 @@ prod-logs-%:
 
 .PHONY: help \
         prod-init prod-up prod-build-admin prod-build-switcher prod-bootstrap-models prod-down prod-ps prod-pull prod-restart \
-        prod-switch prod-switch-async prod-register-model prod-unregister-model prod-status prod-mode-status prod-admin-url prod-list-models prod-stop-models prod-comfy-on prod-comfy-off prod-comfy-on-safe prod-llm-priority prod-gpu-preflight prod-test prod-test-auto prod-test-auto-ext \
+        prod-switch prod-switch-async prod-register-model prod-unregister-model prod-status prod-mode-status prod-admin-url prod-openwebui-url prod-comfyui-url prod-list-models prod-stop-models prod-comfy-on prod-comfy-off prod-comfy-on-safe prod-llm-priority prod-gpu-preflight prod-test prod-test-auto prod-test-auto-ext prod-ports-check prod-proxy-check \
         prod-upgrade-precheck prod-upgrade-canary prod-upgrade-verify prod-upgrade-promote prod-upgrade-rollback \
         prod-logs-list prod-logs-all prod-logs prod-logs-container prod-logs-%
