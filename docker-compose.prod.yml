@@ -251,6 +251,8 @@ services:
       - MODEL_SWITCHER_TOKEN=${MODEL_SWITCHER_TOKEN:-change_me}
       - DOCKER_PROXY_URL=http://docker-socket-proxy:2375
       - WEBUI_DB_PATH=/webui-data/webui.db
+      - LITELLM_URL=http://litellm:4000
+      - LITELLM_KEY=${LITELLM_KEY:-}
     volumes:
       - /opt/ai/openwebui-data:/webui-data:ro
     networks:

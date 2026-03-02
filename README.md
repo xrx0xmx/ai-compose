@@ -261,6 +261,11 @@ Para canal de control directo, publica tambien `http://127.0.0.1:9000/admin` det
 La UI `/admin` pide token `MODEL_SWITCHER_TOKEN` y usa:
 - `POST /mode/switch` para `llm|comfy`
 - `POST /mode/release` para preemption inmediata a LLM
+- `GET /status` + `GET /models` para panel unificado `Estado`, `Modelos IA` y `Data`
+- Logs integrados en `Estado` (seleccion de contenedor + auto refresh)
+- `Data` muestra solo agregados anonimos (`tokens`, `chats`, `usuarios`, `mensajes`)
+
+Para habilitar metricas de tokens en `Data`, define `LITELLM_KEY` (si LiteLLM protege `/metrics`).
 
 ## Runbook de recuperación rápida
 

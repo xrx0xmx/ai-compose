@@ -69,6 +69,7 @@ help:
 	@echo "Comandos principales:"
 	@echo "  make prod-init                  # levanta servicios base y crea contenedores de modelos/comfy"
 	@echo "  make prod-up                    # levanta stack base (webui + switcher + db)"
+	@echo "  make prod-build-admin           # rebuild del panel admin"
 	@echo "  make prod-down                  # apaga todo"
 	@echo "  make prod-ps                    # estado de contenedores"
 	@echo "  make prod-pull                  # actualiza imagenes"
@@ -107,6 +108,7 @@ prod-init:
 	@$(MAKE) prod-bootstrap-models
 
 prod-up:               ; $(PROD) --profile webui up -d
+prod-build-admin:      ; $(PROD) --profile webui build admin-panel && $(PROD) --profile webui up -d admin-panel
 prod-build-switcher:   ; $(PROD) --profile webui build model-switcher
 prod-bootstrap-models: ; $(PROD) $(PROD_MODEL_PROFILES) create vllm-fast vllm-quality vllm-deepseek vllm-qwen32b comfyui
 prod-down:             ; $(PROD) $(PROD_ALL_PROFILES) down
@@ -298,7 +300,7 @@ prod-logs-%:
 	$(PROD) logs -f --tail=$(TAIL) $*
 
 .PHONY: help \
-        prod-init prod-up prod-build-switcher prod-bootstrap-models prod-down prod-ps prod-pull prod-restart \
+        prod-init prod-up prod-build-admin prod-build-switcher prod-bootstrap-models prod-down prod-ps prod-pull prod-restart \
         prod-switch prod-switch-async prod-register-model prod-unregister-model prod-status prod-mode-status prod-admin-url prod-list-models prod-stop-models prod-comfy-on prod-comfy-off prod-comfy-on-safe prod-llm-priority prod-gpu-preflight prod-test prod-test-auto prod-test-auto-ext \
         prod-upgrade-precheck prod-upgrade-canary prod-upgrade-verify prod-upgrade-promote prod-upgrade-rollback \
         prod-logs-list prod-logs-all prod-logs prod-logs-container prod-logs-%

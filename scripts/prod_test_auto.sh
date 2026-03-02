@@ -105,7 +105,8 @@ run_step() {
 }
 
 switch_model() {
-  local model_id="$1"
+  local model_id
+  model_id="$(normalize_model_id "$1")"
   local mode="$2"
   local step="switch_${model_id}"
   if ! curl -sf "$SWITCHER_URL/models" \
@@ -173,6 +174,10 @@ switch_model "qwen-fast" "strict"
 echo "[STEP] dynamic_register"
 if register_dynamic_model >/tmp/prod_dynamic_register.out 2>&1; then
   cat /tmp/prod_dynamic_register.out
+  registered_id="$(jq -r '.model.id // empty' /tmp/prod_dynamic_register.out 2>/dev/null || true)"
+  if [[ -n "${registered_id:-}" ]]; then
+    TEST_DYNAMIC_MODEL_ID="$(normalize_model_id "$registered_id")"
+  fi
   dynamic_created=1
   pass_step "dynamic_register" "model registered"
   rm -f /tmp/prod_dynamic_register.out
