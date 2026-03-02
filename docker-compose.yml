@@ -41,6 +41,12 @@ services:
       - OPENAI_API_BASE_URL=http://litellm:4000/v1
       - OPENAI_API_KEY=${LITELLM_KEY:-cambiaLAclave}
       - ENABLE_FORWARD_USER_INFO_HEADERS=True
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/api/version')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
     restart: unless-stopped
     depends_on:
       - litellm

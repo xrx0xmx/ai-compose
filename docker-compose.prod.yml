@@ -277,7 +277,7 @@ services:
       admin-panel:
         condition: service_started
       open-webui:
-        condition: service_started
+        condition: service_healthy
     volumes:
       - ./ops/nginx/:/etc/nginx/conf.d/:ro
     ports:
