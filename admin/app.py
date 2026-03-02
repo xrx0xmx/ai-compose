@@ -729,6 +729,10 @@ HTML = r"""<!DOCTYPE html>
   @keyframes pulse { from { opacity: .6; } to { opacity: 1; } }
   .header-right { display: flex; align-items: center; gap: 12px; }
   .user-name { font-size: .85rem; color: var(--text2); }
+  .lang-select {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text); padding: 6px 10px; font-size: .8rem;
+  }
 
   .shell { display: flex; flex: 1; }
 
@@ -878,14 +882,14 @@ HTML = r"""<!DOCTYPE html>
 <!-- ═══════════════════════════════ LOGIN ═══════════════════════════════ -->
 <div id="login-screen">
   <div class="login-card">
-    <h1>🛡️ Admin Panel</h1>
-    <p>Usa tus credenciales de Open WebUI (solo admins)</p>
+    <h1 id="login-title">🛡️ Admin Panel</h1>
+    <p id="login-subtitle">Usa tus credenciales de Open WebUI (solo admins)</p>
     <div class="form-group">
-      <label>Email</label>
+      <label id="login-email-label">Email</label>
       <input type="email" id="login-email" placeholder="admin@ejemplo.com" autocomplete="email">
     </div>
     <div class="form-group">
-      <label>Contraseña</label>
+      <label id="login-pass-label">Contraseña</label>
       <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password">
     </div>
     <button class="btn btn-primary btn-full" id="login-btn" onclick="doLogin()">Entrar</button>
@@ -904,23 +908,28 @@ HTML = r"""<!DOCTYPE html>
       </div>
     </div>
     <div class="header-right">
+      <select id="lang-select" class="lang-select" aria-label="Idioma">
+        <option value="es">ES</option>
+        <option value="ca">CA</option>
+        <option value="en">EN</option>
+      </select>
       <span class="user-name" id="user-name"></span>
-      <button class="btn btn-ghost" onclick="doLogout()" style="padding:6px 12px;font-size:.8rem">Salir</button>
+      <button class="btn btn-ghost" id="logout-btn" onclick="doLogout()" style="padding:6px 12px;font-size:.8rem">Salir</button>
     </div>
   </header>
 
   <div class="shell">
     <nav>
       <div class="nav-section">
-        <div class="nav-section-label">Panel</div>
+        <div class="nav-section-label" id="nav-panel-label">Panel</div>
         <div class="nav-item active" onclick="showSection('estado', this)">
-          <span class="nav-icon">📊</span><span>Estado</span>
+          <span class="nav-icon">📊</span><span id="nav-estado">Estado</span>
         </div>
         <div class="nav-item" onclick="showSection('modelos', this)">
-          <span class="nav-icon">🧠</span><span>Modelos IA</span>
+          <span class="nav-icon">🧠</span><span id="nav-modelos">Modelos IA</span>
         </div>
         <div class="nav-item" onclick="showSection('data', this)">
-          <span class="nav-icon">📈</span><span>Data</span>
+          <span class="nav-icon">📈</span><span id="nav-data">Data</span>
         </div>
       </div>
     </nav>
@@ -928,13 +937,13 @@ HTML = r"""<!DOCTYPE html>
     <main>
       <!-- ── Estado ── -->
       <div class="section active" id="sec-estado">
-        <h2>Estado del sistema</h2>
-        <div class="section-note">Vista operativa en tiempo real con estado, progreso de switch y logs.</div>
+        <h2 id="estado-title">Estado del sistema</h2>
+        <div class="section-note" id="estado-note">Vista operativa en tiempo real con estado, progreso de switch y logs.</div>
         <div class="cards" id="status-cards">
-          <div class="card"><div class="card-label">Modo</div><div class="card-value" id="card-mode">—</div></div>
-          <div class="card"><div class="card-label">Modelo activo</div><div class="card-value" id="card-model">—</div></div>
-          <div class="card"><div class="card-label">ComfyUI</div><div class="card-value" id="card-comfy">—</div></div>
-          <div class="card"><div class="card-label">Tiempo restante</div><div class="card-value" id="card-ttl">—</div></div>
+          <div class="card"><div class="card-label" id="card-mode-label">Modo</div><div class="card-value" id="card-mode">—</div></div>
+          <div class="card"><div class="card-label" id="card-model-label">Modelo activo</div><div class="card-value" id="card-model">—</div></div>
+          <div class="card"><div class="card-label" id="card-comfy-label">ComfyUI</div><div class="card-value" id="card-comfy">—</div></div>
+          <div class="card"><div class="card-label" id="card-ttl-label">Tiempo restante</div><div class="card-value" id="card-ttl">—</div></div>
         </div>
 
         <div class="switch-progress" id="switch-progress">
@@ -943,19 +952,19 @@ HTML = r"""<!DOCTYPE html>
         </div>
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
-          <button class="btn btn-ghost" onclick="refreshAll()">↻ Refrescar</button>
+          <button class="btn btn-ghost" id="refresh-btn" onclick="refreshAll()">↻ Refrescar</button>
         </div>
         <div style="font-size:.75rem;color:var(--text2);margin-bottom:16px" id="last-updated"></div>
 
         <div class="stack">
           <div class="card">
-            <div class="card-label">Logs en vivo</div>
+            <div class="card-label" id="logs-live-label">Logs en vivo</div>
             <div class="logs-toolbar">
               <select class="container-select" id="log-container-select"></select>
-              <button class="btn btn-ghost" onclick="fetchLogs()">↻ Cargar logs</button>
+              <button class="btn btn-ghost" id="load-logs-btn" onclick="fetchLogs()">↻ Cargar logs</button>
               <label class="auto-label">
                 <input type="checkbox" id="log-auto" onchange="toggleAutoLogs()">
-                Auto (10s)
+                <span id="logs-auto-label">Auto (10s)</span>
               </label>
             </div>
             <div class="log-box" id="log-box">Selecciona un contenedor y pulsa "Cargar logs"</div>
@@ -965,28 +974,28 @@ HTML = r"""<!DOCTYPE html>
 
       <!-- ── Modelos IA ── -->
       <div class="section" id="sec-modelos">
-        <h2>Modelos IA</h2>
-        <div class="section-note">Control unificado de modelos LLM y sesión temporal de ComfyUI.</div>
+        <h2 id="modelos-title">Modelos IA</h2>
+        <div class="section-note" id="modelos-note">Control unificado de modelos LLM y sesión temporal de ComfyUI.</div>
         <div class="model-grid" id="model-grid"></div>
       </div>
 
       <!-- ── Data ── -->
       <div class="section" id="sec-data">
-        <h2>Data (anónima)</h2>
-        <div class="section-note">Solo métricas agregadas del sistema. No se muestran prompts ni contenido de usuario.</div>
+        <h2 id="data-title">Data (anónima)</h2>
+        <div class="section-note" id="data-note">Solo métricas agregadas del sistema. No se muestran prompts ni contenido de usuario.</div>
         <div class="cards">
-          <div class="card"><div class="card-label">Tokens totales</div><div class="card-value" id="data-tokens">—</div><div class="card-sub" id="data-tokens-sub"></div></div>
-          <div class="card"><div class="card-label">Chats abiertos</div><div class="card-value" id="data-chats-open">—</div><div class="card-sub" id="data-chats-sub"></div></div>
-          <div class="card"><div class="card-label">Usuarios</div><div class="card-value" id="data-users">—</div><div class="card-sub" id="data-users-sub"></div></div>
-          <div class="card"><div class="card-label">Mensajes</div><div class="card-value" id="data-messages">—</div><div class="card-sub" id="data-msg-sub"></div></div>
+          <div class="card"><div class="card-label" id="data-tokens-label">Tokens totales</div><div class="card-value" id="data-tokens">—</div><div class="card-sub" id="data-tokens-sub"></div></div>
+          <div class="card"><div class="card-label" id="data-chats-open-label">Chats abiertos</div><div class="card-value" id="data-chats-open">—</div><div class="card-sub" id="data-chats-sub"></div></div>
+          <div class="card"><div class="card-label" id="data-users-label">Usuarios</div><div class="card-value" id="data-users">—</div><div class="card-sub" id="data-users-sub"></div></div>
+          <div class="card"><div class="card-label" id="data-messages-label">Mensajes</div><div class="card-value" id="data-messages">—</div><div class="card-sub" id="data-msg-sub"></div></div>
         </div>
         <div class="split-grid">
           <div class="card">
-            <div class="card-label">Actividad de chats (14d)</div>
+            <div class="card-label" id="data-chats-series-label">Actividad de chats (14d)</div>
             <div class="chart-grid" id="chat-series"></div>
           </div>
           <div class="card">
-            <div class="card-label">Fuentes de datos</div>
+            <div class="card-label" id="data-sources-label">Fuentes de datos</div>
             <div class="source-list" id="data-sources"></div>
           </div>
         </div>
@@ -1005,6 +1014,371 @@ const MODEL_INFO = {
   'qwen-max':     {label:'Qwen 2.5 32B',    vram:'~21 GB (95%)'},
 };
 
+const I18N = {
+  es: {
+    title: 'Admin Panel — AI Server',
+    login_title: '🛡️ Admin Panel',
+    login_subtitle: 'Usa tus credenciales de Open WebUI (solo admins)',
+    email: 'Email',
+    password: 'Contraseña',
+    login_button: 'Entrar',
+    login_loading: 'Entrando…',
+    logout: 'Salir',
+    panel: 'Panel',
+    loading: 'cargando…',
+    nav_estado: 'Estado',
+    nav_modelos: 'Modelos IA',
+    nav_data: 'Data',
+    estado_title: 'Estado del sistema',
+    estado_note: 'Vista operativa en tiempo real con estado, progreso de switch y logs.',
+    mode: 'Modo',
+    active_model: 'Modelo activo',
+    comfyui: 'ComfyUI',
+    ttl_remaining: 'Tiempo restante',
+    refresh: '↻ Refrescar',
+    logs_live: 'Logs en vivo',
+    load_logs: '↻ Cargar logs',
+    logs_auto: 'Auto (10s)',
+    logs_placeholder: 'Selecciona un contenedor y pulsa "Cargar logs"',
+    modelos_title: 'Modelos IA',
+    modelos_note: 'Control unificado de modelos LLM y sesión temporal de ComfyUI.',
+    data_title: 'Data (anónima)',
+    data_note: 'Solo métricas agregadas del sistema. No se muestran prompts ni contenido de usuario.',
+    tokens_total: 'Tokens totales',
+    chats_open: 'Chats abiertos',
+    users: 'Usuarios',
+    messages: 'Mensajes',
+    chats_activity: 'Actividad de chats (14d)',
+    data_sources: 'Fuentes de datos',
+    session_expired: 'Sesión expirada',
+    auth_error: 'Error de autenticación',
+    no_connection: 'Sin conexión',
+    switching: 'Cambiando…',
+    comfy_active_badge: 'ComfyUI activo',
+    llm_badge: 'LLM · {model}',
+    no_model_badge: 'Sin modelo',
+    comfy_active_short: '▶ Activo',
+    comfy_inactive_short: '⏹ Inactivo',
+    updated_at: 'Actualizado: {time}',
+    model_dynamic: 'dinámico',
+    repo: 'repo',
+    model_active_chip: '● Activo',
+    model_error_chip: '● Error',
+    model_running_chip: '● Ejecutando',
+    model_prepared_chip: '○ Preparado',
+    model_stopped_chip: '○ Detenido',
+    model_activate: 'Activar',
+    model_is_active: '✓ Activo',
+    open_ui: '🌐 Abrir UI',
+    no_models: 'No hay modelos disponibles.',
+    llm_none: 'No hay modelos LLM registrados.',
+    comfy_card_title: 'ComfyUI',
+    comfy_card_subtitle: 'Generación de imagen (sesión temporal)',
+    comfy_activate: '🎨 Activar ComfyUI',
+    comfy_switch_wait: 'Esperando transición de modo…',
+    comfy_open: '🔗 Abrir ComfyUI → {url}',
+    comfy_available_until: 'Disponible hasta: {time}',
+    comfy_return_to_llm: 'Volver a LLM:',
+    comfy_return: '✅ Volver a LLM',
+    comfy_preempt: '⚡ Preemption urgente',
+    comfy_preempt_title: 'Fuerza el retorno inmediato a LLM',
+    data_not_available: 'N/D',
+    data_24h_na: '24h: no disponible',
+    data_24h_value: '24h: {count}',
+    data_total_24h: 'Total: {total} · 24h: {last24h}',
+    data_active_24h: 'Activos 24h: {count}',
+    data_msg_24h_req: '24h: {last24h} · Requests: {req}',
+    data_no_series: 'Sin datos de serie temporal.',
+    source_ok: 'ok',
+    source_degraded: 'degradado',
+    logs_loading: 'Cargando…',
+    logs_empty: '(sin output)',
+    logs_error: 'Error: {error}',
+    mode_not_available: '—',
+    ttl_minutes: '{minutes} min',
+    ttl_none: '—',
+    unknown: '—',
+    toast_models_load_error: 'No se pudo cargar modelos IA: {error}',
+    toast_data_load_error: 'No se pudo cargar Data: {error}',
+    toast_switch_start: 'Iniciando cambio a {model}…',
+    toast_switch_started: 'Cambio iniciado → {model}',
+    toast_activate_comfy: 'Activando ComfyUI ({ttl} min)…',
+    toast_activate_comfy_started: 'ComfyUI activándose…',
+    toast_deactivate_comfy: 'Volviendo a LLM ({model})…',
+    toast_deactivate_comfy_started: 'Retornando a LLM…',
+    toast_preempt: 'Preemption: forzando retorno a LLM…',
+    toast_preempt_started: 'Preemption iniciado',
+    ttl_control_unavailable: 'Control TTL no disponible',
+    return_selector_unavailable: 'Selector de modelo no disponible',
+  },
+  ca: {
+    title: 'Panell Admin — AI Server',
+    login_title: '🛡️ Panell Admin',
+    login_subtitle: 'Utilitza les teves credencials d’Open WebUI (només admins)',
+    email: 'Correu',
+    password: 'Contrasenya',
+    login_button: 'Entrar',
+    login_loading: 'Entrant…',
+    logout: 'Sortir',
+    panel: 'Panell',
+    loading: 'carregant…',
+    nav_estado: 'Estat',
+    nav_modelos: 'Models IA',
+    nav_data: 'Dades',
+    estado_title: 'Estat del sistema',
+    estado_note: 'Vista operativa en temps real amb estat, progrés de canvi i logs.',
+    mode: 'Mode',
+    active_model: 'Model actiu',
+    comfyui: 'ComfyUI',
+    ttl_remaining: 'Temps restant',
+    refresh: '↻ Refrescar',
+    logs_live: 'Logs en viu',
+    load_logs: '↻ Carregar logs',
+    logs_auto: 'Auto (10s)',
+    logs_placeholder: 'Selecciona un contenidor i prem "Carregar logs"',
+    modelos_title: 'Models IA',
+    modelos_note: 'Control unificat de models LLM i sessió temporal de ComfyUI.',
+    data_title: 'Dades (anònimes)',
+    data_note: 'Només mètriques agregades del sistema. No es mostren prompts ni contingut d’usuari.',
+    tokens_total: 'Tokens totals',
+    chats_open: 'Xats oberts',
+    users: 'Usuaris',
+    messages: 'Missatges',
+    chats_activity: 'Activitat de xats (14d)',
+    data_sources: 'Fonts de dades',
+    session_expired: 'Sessió caducada',
+    auth_error: 'Error d’autenticació',
+    no_connection: 'Sense connexió',
+    switching: 'Canviant…',
+    comfy_active_badge: 'ComfyUI actiu',
+    llm_badge: 'LLM · {model}',
+    no_model_badge: 'Sense model',
+    comfy_active_short: '▶ Actiu',
+    comfy_inactive_short: '⏹ Inactiu',
+    updated_at: 'Actualitzat: {time}',
+    model_dynamic: 'dinàmic',
+    repo: 'repo',
+    model_active_chip: '● Actiu',
+    model_error_chip: '● Error',
+    model_running_chip: '● Executant',
+    model_prepared_chip: '○ Preparat',
+    model_stopped_chip: '○ Aturat',
+    model_activate: 'Activar',
+    model_is_active: '✓ Actiu',
+    open_ui: '🌐 Obrir UI',
+    no_models: 'No hi ha models disponibles.',
+    llm_none: 'No hi ha models LLM registrats.',
+    comfy_card_title: 'ComfyUI',
+    comfy_card_subtitle: 'Generació d’imatge (sessió temporal)',
+    comfy_activate: '🎨 Activar ComfyUI',
+    comfy_switch_wait: 'Esperant transició de mode…',
+    comfy_open: '🔗 Obrir ComfyUI → {url}',
+    comfy_available_until: 'Disponible fins a: {time}',
+    comfy_return_to_llm: 'Tornar a LLM:',
+    comfy_return: '✅ Tornar a LLM',
+    comfy_preempt: '⚡ Preemption urgent',
+    comfy_preempt_title: 'Força el retorn immediat a LLM',
+    data_not_available: 'N/D',
+    data_24h_na: '24h: no disponible',
+    data_24h_value: '24h: {count}',
+    data_total_24h: 'Total: {total} · 24h: {last24h}',
+    data_active_24h: 'Actius 24h: {count}',
+    data_msg_24h_req: '24h: {last24h} · Requests: {req}',
+    data_no_series: 'Sense dades de sèrie temporal.',
+    source_ok: 'ok',
+    source_degraded: 'degradat',
+    logs_loading: 'Carregant…',
+    logs_empty: '(sense sortida)',
+    logs_error: 'Error: {error}',
+    mode_not_available: '—',
+    ttl_minutes: '{minutes} min',
+    ttl_none: '—',
+    unknown: '—',
+    toast_models_load_error: 'No s’han pogut carregar els models IA: {error}',
+    toast_data_load_error: 'No s’han pogut carregar les dades: {error}',
+    toast_switch_start: 'Iniciant canvi a {model}…',
+    toast_switch_started: 'Canvi iniciat → {model}',
+    toast_activate_comfy: 'Activant ComfyUI ({ttl} min)…',
+    toast_activate_comfy_started: 'ComfyUI activant-se…',
+    toast_deactivate_comfy: 'Tornant a LLM ({model})…',
+    toast_deactivate_comfy_started: 'Tornant a LLM…',
+    toast_preempt: 'Preemption: forçant retorn a LLM…',
+    toast_preempt_started: 'Preemption iniciat',
+    ttl_control_unavailable: 'Control TTL no disponible',
+    return_selector_unavailable: 'Selector de model no disponible',
+  },
+  en: {
+    title: 'Admin Panel — AI Server',
+    login_title: '🛡️ Admin Panel',
+    login_subtitle: 'Use your Open WebUI credentials (admins only)',
+    email: 'Email',
+    password: 'Password',
+    login_button: 'Sign in',
+    login_loading: 'Signing in…',
+    logout: 'Logout',
+    panel: 'Panel',
+    loading: 'loading…',
+    nav_estado: 'Status',
+    nav_modelos: 'AI Models',
+    nav_data: 'Data',
+    estado_title: 'System status',
+    estado_note: 'Real-time operations view with status, switch progress, and logs.',
+    mode: 'Mode',
+    active_model: 'Active model',
+    comfyui: 'ComfyUI',
+    ttl_remaining: 'Time left',
+    refresh: '↻ Refresh',
+    logs_live: 'Live logs',
+    load_logs: '↻ Load logs',
+    logs_auto: 'Auto (10s)',
+    logs_placeholder: 'Select a container and click "Load logs"',
+    modelos_title: 'AI Models',
+    modelos_note: 'Unified control for LLM models and temporary ComfyUI session.',
+    data_title: 'Data (anonymous)',
+    data_note: 'Only aggregated system metrics. No prompts or user content are shown.',
+    tokens_total: 'Total tokens',
+    chats_open: 'Open chats',
+    users: 'Users',
+    messages: 'Messages',
+    chats_activity: 'Chat activity (14d)',
+    data_sources: 'Data sources',
+    session_expired: 'Session expired',
+    auth_error: 'Authentication error',
+    no_connection: 'No connection',
+    switching: 'Switching…',
+    comfy_active_badge: 'ComfyUI active',
+    llm_badge: 'LLM · {model}',
+    no_model_badge: 'No model',
+    comfy_active_short: '▶ Active',
+    comfy_inactive_short: '⏹ Inactive',
+    updated_at: 'Updated: {time}',
+    model_dynamic: 'dynamic',
+    repo: 'repo',
+    model_active_chip: '● Active',
+    model_error_chip: '● Error',
+    model_running_chip: '● Running',
+    model_prepared_chip: '○ Ready',
+    model_stopped_chip: '○ Stopped',
+    model_activate: 'Activate',
+    model_is_active: '✓ Active',
+    open_ui: '🌐 Open UI',
+    no_models: 'No models available.',
+    llm_none: 'No LLM models registered.',
+    comfy_card_title: 'ComfyUI',
+    comfy_card_subtitle: 'Image generation (temporary session)',
+    comfy_activate: '🎨 Activate ComfyUI',
+    comfy_switch_wait: 'Waiting for mode transition…',
+    comfy_open: '🔗 Open ComfyUI → {url}',
+    comfy_available_until: 'Available until: {time}',
+    comfy_return_to_llm: 'Back to LLM:',
+    comfy_return: '✅ Back to LLM',
+    comfy_preempt: '⚡ Urgent preemption',
+    comfy_preempt_title: 'Force immediate return to LLM',
+    data_not_available: 'N/A',
+    data_24h_na: '24h: unavailable',
+    data_24h_value: '24h: {count}',
+    data_total_24h: 'Total: {total} · 24h: {last24h}',
+    data_active_24h: 'Active 24h: {count}',
+    data_msg_24h_req: '24h: {last24h} · Requests: {req}',
+    data_no_series: 'No time-series data.',
+    source_ok: 'ok',
+    source_degraded: 'degraded',
+    logs_loading: 'Loading…',
+    logs_empty: '(no output)',
+    logs_error: 'Error: {error}',
+    mode_not_available: '—',
+    ttl_minutes: '{minutes} min',
+    ttl_none: '—',
+    unknown: '—',
+    toast_models_load_error: 'Could not load AI models: {error}',
+    toast_data_load_error: 'Could not load data: {error}',
+    toast_switch_start: 'Starting switch to {model}…',
+    toast_switch_started: 'Switch started → {model}',
+    toast_activate_comfy: 'Activating ComfyUI ({ttl} min)…',
+    toast_activate_comfy_started: 'ComfyUI is starting…',
+    toast_deactivate_comfy: 'Returning to LLM ({model})…',
+    toast_deactivate_comfy_started: 'Returning to LLM…',
+    toast_preempt: 'Preemption: forcing return to LLM…',
+    toast_preempt_started: 'Preemption started',
+    ttl_control_unavailable: 'TTL control is unavailable',
+    return_selector_unavailable: 'Model selector is unavailable',
+  },
+};
+
+let LANG = localStorage.getItem('admin_lang') || 'es';
+
+function t(key, vars = {}) {
+  const dict = I18N[LANG] || I18N.es;
+  let text = dict[key] || I18N.es[key] || key;
+  Object.entries(vars).forEach(([k, v]) => {
+    text = text.replaceAll(`{${k}}`, String(v));
+  });
+  return text;
+}
+
+function setText(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value;
+}
+
+function applyI18nStatic() {
+  document.title = t('title');
+  setText('login-title', t('login_title'));
+  setText('login-subtitle', t('login_subtitle'));
+  setText('login-email-label', t('email'));
+  setText('login-pass-label', t('password'));
+  const loginBtn = document.getElementById('login-btn');
+  if (loginBtn && !loginBtn.disabled) loginBtn.textContent = t('login_button');
+  setText('logout-btn', t('logout'));
+  setText('nav-panel-label', t('panel'));
+  setText('nav-estado', t('nav_estado'));
+  setText('nav-modelos', t('nav_modelos'));
+  setText('nav-data', t('nav_data'));
+  setText('estado-title', t('estado_title'));
+  setText('estado-note', t('estado_note'));
+  setText('card-mode-label', t('mode'));
+  setText('card-model-label', t('active_model'));
+  setText('card-comfy-label', t('comfyui'));
+  setText('card-ttl-label', t('ttl_remaining'));
+  setText('refresh-btn', t('refresh'));
+  setText('logs-live-label', t('logs_live'));
+  setText('load-logs-btn', t('load_logs'));
+  setText('logs-auto-label', t('logs_auto'));
+  setText('modelos-title', t('modelos_title'));
+  setText('modelos-note', t('modelos_note'));
+  setText('data-title', t('data_title'));
+  setText('data-note', t('data_note'));
+  setText('data-tokens-label', t('tokens_total'));
+  setText('data-chats-open-label', t('chats_open'));
+  setText('data-users-label', t('users'));
+  setText('data-messages-label', t('messages'));
+  setText('data-chats-series-label', t('chats_activity'));
+  setText('data-sources-label', t('data_sources'));
+  setText('sys-label', t('loading'));
+
+  const emailInput = document.getElementById('login-email');
+  if (emailInput) emailInput.placeholder = 'admin@example.com';
+  const passInput = document.getElementById('login-password');
+  if (passInput) passInput.placeholder = '••••••••';
+  const logBox = document.getElementById('log-box');
+  if (logBox && !logsBootstrapped) logBox.textContent = t('logs_placeholder');
+  setText('switch-progress-title', t('switching'));
+}
+
+function setLanguage(nextLang) {
+  LANG = ['es', 'ca', 'en'].includes(nextLang) ? nextLang : 'es';
+  localStorage.setItem('admin_lang', LANG);
+  const select = document.getElementById('lang-select');
+  if (select && select.value !== LANG) select.value = LANG;
+  applyI18nStatic();
+  if (statusData) renderStatus(statusData);
+  if (aiModelsData || statusData) {
+    renderModelGrid();
+    syncReturnModelSelect();
+  }
+  if (dataOverview || dataSeries) renderData();
+}
+
 let TOKEN = localStorage.getItem('admin_jwt') || '';
 let statusData = null;
 let aiModelsData = null;
@@ -1020,6 +1394,12 @@ let pendingModeTarget = null;
 const serverHost = window.location.hostname;
 
 window.addEventListener('DOMContentLoaded', () => {
+  const langSelect = document.getElementById('lang-select');
+  if (langSelect) {
+    langSelect.value = LANG;
+    langSelect.addEventListener('change', e => setLanguage(e.target.value));
+  }
+  setLanguage(LANG);
   if (TOKEN) tryAutoLogin();
   document.getElementById('login-password').addEventListener('keydown', e => {
     if (e.key === 'Enter') doLogin();
@@ -1044,7 +1424,7 @@ async function doLogin() {
 
   errorEl.textContent = '';
   button.disabled = true;
-  button.textContent = 'Entrando…';
+  button.textContent = t('login_loading');
   try {
     const r = await fetch('/auth/login', {
       method: 'POST',
@@ -1052,7 +1432,7 @@ async function doLogin() {
       body: JSON.stringify({email, password}),
     });
     const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || 'Error de autenticación');
+    if (!r.ok) throw new Error(data.detail || t('auth_error'));
     TOKEN = data.token;
     localStorage.setItem('admin_jwt', TOKEN);
     showApp(data.name);
@@ -1060,7 +1440,7 @@ async function doLogin() {
     errorEl.textContent = e.message;
   } finally {
     button.disabled = false;
-    button.textContent = 'Entrar';
+    button.textContent = t('login_button');
   }
 }
 
@@ -1103,7 +1483,7 @@ async function apiFetch(path, opts = {}) {
   const r = await fetch(path, {...opts, headers});
   if (r.status === 401) {
     doLogout();
-    throw new Error('Sesión expirada');
+    throw new Error(t('session_expired'));
   }
   if (!r.ok) {
     const data = await r.json().catch(() => ({}));
@@ -1128,7 +1508,7 @@ async function refreshStatus() {
       fetchLogs();
     }
   } catch {
-    setSysBadge('red', 'Sin conexión');
+    setSysBadge('red', t('no_connection'));
   }
 }
 
@@ -1139,7 +1519,7 @@ async function refreshModels() {
     syncReturnModelSelect();
     ensureLogContainerOptions();
   } catch (e) {
-    showToast('err', 'No se pudo cargar modelos IA: ' + e.message);
+    showToast('err', t('toast_models_load_error', {error: e.message}));
   }
 }
 
@@ -1153,7 +1533,7 @@ async function refreshData() {
     dataSeries = series;
     renderData();
   } catch (e) {
-    showToast('err', 'No se pudo cargar Data: ' + e.message);
+    showToast('err', t('toast_data_load_error', {error: e.message}));
   }
 }
 
@@ -1165,30 +1545,30 @@ function renderStatus(d) {
   const switchInProgress = Boolean(d.switch_in_progress);
 
   if (switchInProgress) {
-    setSysBadge('orange', 'Cambiando…');
+    setSysBadge('orange', t('switching'));
   } else if (mode === 'comfy') {
-    setSysBadge('orange', 'ComfyUI activo');
+    setSysBadge('orange', t('comfy_active_badge'));
   } else if (mode === 'llm' && model && model !== '—') {
-    setSysBadge('green', 'LLM · ' + model);
+    setSysBadge('green', t('llm_badge', {model}));
   } else {
-    setSysBadge('red', 'Sin modelo');
+    setSysBadge('red', t('no_model_badge'));
   }
 
   document.getElementById('card-mode').textContent = String(mode).toUpperCase();
   document.getElementById('card-model').textContent = model;
-  document.getElementById('card-comfy').textContent = comfyStatus === 'running' ? '▶ Activo' : '⏹ Inactivo';
+  document.getElementById('card-comfy').textContent = comfyStatus === 'running' ? t('comfy_active_short') : t('comfy_inactive_short');
   document.getElementById('card-comfy').style.color = comfyStatus === 'running' ? 'var(--green)' : 'var(--text2)';
 
   if (lease?.remaining_seconds && !lease.expired) {
     const min = Math.ceil(lease.remaining_seconds / 60);
-    document.getElementById('card-ttl').textContent = min + ' min';
+    document.getElementById('card-ttl').textContent = t('ttl_minutes', {minutes: min});
     document.getElementById('card-ttl').style.color = min < 10 ? 'var(--orange)' : 'var(--text)';
   } else {
-    document.getElementById('card-ttl').textContent = '—';
+    document.getElementById('card-ttl').textContent = t('ttl_none');
     document.getElementById('card-ttl').style.color = 'var(--text2)';
   }
 
-  document.getElementById('last-updated').textContent = 'Actualizado: ' + new Date().toLocaleTimeString();
+  document.getElementById('last-updated').textContent = t('updated_at', {time: new Date().toLocaleTimeString()});
   renderSwitchProgress(d);
 }
 
@@ -1196,7 +1576,7 @@ function renderSwitchProgress(d) {
   const prog = document.getElementById('switch-progress');
   if (d.switch_in_progress && d.switch) {
     prog.classList.add('visible');
-    document.getElementById('switch-progress-title').textContent = d.switch.state_text || 'Cambiando…';
+    document.getElementById('switch-progress-title').textContent = d.switch.state_text || t('switching');
     const list = document.getElementById('switch-steps');
     list.innerHTML = '';
     (d.switch.steps || []).forEach(step => {
@@ -1226,7 +1606,7 @@ function readableModelMeta(model) {
   if (info.vram) parts.push(info.vram);
   if (model.quantization) parts.push('quant=' + model.quantization);
   if (model.dtype) parts.push('dtype=' + model.dtype);
-  if (model.dynamic) parts.push('dinámico');
+  if (model.dynamic) parts.push(t('model_dynamic'));
   return parts.join(' · ') || (model.hf_repo || model.litellm_model || '—');
 }
 
@@ -1246,36 +1626,36 @@ function renderModelGrid() {
     const isErrored = running && runtime.health === 'unhealthy';
 
     let chipClass = 'chip-stopped';
-    let chipText = '○ Detenido';
+    let chipText = t('model_stopped_chip');
     if (isActive) {
       chipClass = 'chip-running';
-      chipText = '● Activo';
+      chipText = t('model_active_chip');
     } else if (isErrored) {
       chipClass = 'chip-error';
-      chipText = '● Error';
+      chipText = t('model_error_chip');
     } else if (running) {
       chipClass = 'chip-loading';
-      chipText = '● Ejecutando';
+      chipText = t('model_running_chip');
     } else if (runtime.status === 'created') {
       chipClass = 'chip-stopped';
-      chipText = '○ Preparado';
+      chipText = t('model_prepared_chip');
     }
 
     const repoText = model.hf_repo || model.litellm_model || '—';
     const disabled = switchInProgress || isActive || activeMode === 'comfy';
     const openUiBtn = isActive
-      ? `<a class="btn btn-ghost" href="${webuiUrl}" target="_blank" rel="noopener noreferrer">🌐 Abrir UI</a>`
+      ? `<a class="btn btn-ghost" href="${webuiUrl}" target="_blank" rel="noopener noreferrer">${t('open_ui')}</a>`
       : '';
     const card = document.createElement('div');
     card.className = 'model-card' + (isActive ? ' active-model' : '');
     card.innerHTML = `
       <div class="model-card-name">${readableModelName(model.id)}</div>
       <div class="model-card-meta">${readableModelMeta(model)}</div>
-      <div class="model-card-meta">repo: ${repoText}</div>
+      <div class="model-card-meta">${t('repo')}: ${repoText}</div>
       <span class="status-chip ${chipClass}">${chipText}</span>
       <div class="model-actions">
         <button class="btn ${isActive ? 'btn-ghost' : 'btn-primary'}" onclick="switchToModel('${model.id}')" ${disabled ? 'disabled' : ''}>
-          ${isActive ? '✓ Activo' : 'Activar'}
+          ${isActive ? t('model_is_active') : t('model_activate')}
         </button>
         ${openUiBtn}
       </div>
@@ -1292,40 +1672,40 @@ function renderModelGrid() {
     .map(v => `<option value="${v}" ${previousTtl === v ? 'selected' : ''}>${v} min</option>`)
     .join('');
 
-  let comfyChip = '<span class="status-chip chip-stopped">○ Inactivo</span>';
+  let comfyChip = `<span class="status-chip chip-stopped">${t('model_stopped_chip')}</span>`;
   let comfyControls = `
     <div class="comfy-controls">
-      <span style="font-size:.9rem;color:var(--text2)">TTL:</span>
+      <span style="font-size:.9rem;color:var(--text2)">TTL</span>
       <select class="ttl-select" id="ttl-select">${ttlOptions}</select>
-      <button class="btn btn-primary" onclick="activateComfy()">🎨 Activar ComfyUI</button>
+      <button class="btn btn-primary" onclick="activateComfy()">${t('comfy_activate')}</button>
     </div>
   `;
   let comfyCardClass = 'model-card';
 
   if (mode === 'comfy' && comfyRunning) {
-    comfyChip = '<span class="status-chip chip-comfy">● Activo</span>';
+    comfyChip = `<span class="status-chip chip-comfy">${t('model_active_chip')}</span>`;
     comfyCardClass = 'model-card comfy-active';
-    const expires = lease?.expires_at ? new Date(lease.expires_at).toLocaleTimeString() : 'sin límite';
+    const expires = lease?.expires_at ? new Date(lease.expires_at).toLocaleTimeString() : t('ttl_none');
     comfyControls = `
-      <a class="comfy-link" href="${comfyUrl}" target="_blank" rel="noopener noreferrer">🔗 Abrir ComfyUI → ${comfyUrl}</a>
-      <div class="model-card-meta">Disponible hasta: ${expires}</div>
+      <a class="comfy-link" href="${comfyUrl}" target="_blank" rel="noopener noreferrer">${t('comfy_open', {url: comfyUrl})}</a>
+      <div class="model-card-meta">${t('comfy_available_until', {time: expires})}</div>
       <div class="model-return-row">
-        <span style="font-size:.9rem;color:var(--text2)">Volver a LLM:</span>
+        <span style="font-size:.9rem;color:var(--text2)">${t('comfy_return_to_llm')}</span>
         <select class="model-select" id="return-model-select"></select>
-        <button class="btn btn-success" onclick="deactivateComfy()">✅ Volver a LLM</button>
-        <button class="btn btn-danger" onclick="preemptComfy()" title="Fuerza el retorno inmediato a LLM">⚡ Preemption urgente</button>
+        <button class="btn btn-success" onclick="deactivateComfy()">${t('comfy_return')}</button>
+        <button class="btn btn-danger" onclick="preemptComfy()" title="${t('comfy_preempt_title')}">${t('comfy_preempt')}</button>
       </div>
     `;
   } else if (comfyTransition) {
-    comfyChip = '<span class="status-chip chip-loading">⏳ Cambiando…</span>';
-    comfyControls = '<div class="model-card-meta">Esperando transición de modo…</div>';
+    comfyChip = `<span class="status-chip chip-loading">⏳ ${t('switching')}</span>`;
+    comfyControls = `<div class="model-card-meta">${t('comfy_switch_wait')}</div>`;
   }
 
   const comfyCard = document.createElement('div');
   comfyCard.className = comfyCardClass;
   comfyCard.innerHTML = `
-    <div class="model-card-name">ComfyUI</div>
-    <div class="model-card-meta">Generación de imagen (sesión temporal)</div>
+    <div class="model-card-name">${t('comfy_card_title')}</div>
+    <div class="model-card-meta">${t('comfy_card_subtitle')}</div>
     ${comfyChip}
     ${comfyControls}
   `;
@@ -1334,7 +1714,7 @@ function renderModelGrid() {
   if (!models.length) {
     const emptyCard = document.createElement('div');
     emptyCard.className = 'model-card';
-    emptyCard.innerHTML = '<div class="model-card-name">LLM</div><div class="model-card-meta">No hay modelos LLM registrados.</div>';
+    emptyCard.innerHTML = `<div class="model-card-name">LLM</div><div class="model-card-meta">${t('llm_none')}</div>`;
     grid.prepend(emptyCard);
   }
 }
@@ -1369,14 +1749,14 @@ function renderData() {
   const metrics = dataOverview?.metrics || {};
   const sources = dataOverview?.sources || {};
 
-  document.getElementById('data-tokens').textContent = metrics.tokens_total == null ? 'N/D' : fmtNum(metrics.tokens_total);
-  document.getElementById('data-tokens-sub').textContent = metrics.tokens_24h == null ? '24h: no disponible' : `24h: ${fmtNum(metrics.tokens_24h)}`;
+  document.getElementById('data-tokens').textContent = metrics.tokens_total == null ? t('data_not_available') : fmtNum(metrics.tokens_total);
+  document.getElementById('data-tokens-sub').textContent = metrics.tokens_24h == null ? t('data_24h_na') : t('data_24h_value', {count: fmtNum(metrics.tokens_24h)});
   document.getElementById('data-chats-open').textContent = fmtNum(metrics.chats_open);
-  document.getElementById('data-chats-sub').textContent = `Total: ${fmtNum(metrics.chats_total)} · 24h: ${fmtNum(metrics.chats_24h)}`;
+  document.getElementById('data-chats-sub').textContent = t('data_total_24h', {total: fmtNum(metrics.chats_total), last24h: fmtNum(metrics.chats_24h)});
   document.getElementById('data-users').textContent = fmtNum(metrics.users_total);
-  document.getElementById('data-users-sub').textContent = `Activos 24h: ${fmtNum(metrics.users_active_24h)}`;
+  document.getElementById('data-users-sub').textContent = t('data_active_24h', {count: fmtNum(metrics.users_active_24h)});
   document.getElementById('data-messages').textContent = fmtNum(metrics.messages_total);
-  document.getElementById('data-msg-sub').textContent = `24h: ${fmtNum(metrics.messages_24h)} · Requests: ${fmtNum(metrics.requests_total)}`;
+  document.getElementById('data-msg-sub').textContent = t('data_msg_24h_req', {last24h: fmtNum(metrics.messages_24h), req: fmtNum(metrics.requests_total)});
 
   const chartEl = document.getElementById('chat-series');
   chartEl.innerHTML = '';
@@ -1394,14 +1774,14 @@ function renderData() {
     `;
     chartEl.appendChild(row);
   });
-  if (!points.length) chartEl.innerHTML = '<div class="card-sub">Sin datos de serie temporal.</div>';
+  if (!points.length) chartEl.innerHTML = `<div class="card-sub">${t('data_no_series')}</div>`;
 
   const srcEl = document.getElementById('data-sources');
   srcEl.innerHTML = '';
   Object.entries(sources).forEach(([name, payload]) => {
     const line = document.createElement('div');
     line.className = 'source-item';
-    const ok = payload?.ok ? 'ok' : 'degradado';
+    const ok = payload?.ok ? t('source_ok') : t('source_degraded');
     const detail = payload?.error ? ` · ${payload.error}` : '';
     line.textContent = `${name}: ${ok}${detail}`;
     srcEl.appendChild(line);
@@ -1446,13 +1826,13 @@ async function fetchLogs() {
   const select = document.getElementById('log-container-select');
   const box = document.getElementById('log-box');
   const container = select.value || defaultLogContainer();
-  box.textContent = 'Cargando…';
+  box.textContent = t('logs_loading');
   try {
     const data = await apiFetch('/api/logs?container=' + encodeURIComponent(container) + '&tail=300');
-    renderLogs(data.logs || '(sin output)');
+    renderLogs(data.logs || t('logs_empty'));
     box.scrollTop = box.scrollHeight;
   } catch (e) {
-    box.textContent = 'Error: ' + e.message;
+    box.textContent = t('logs_error', {error: e.message});
   }
 }
 
@@ -1482,14 +1862,14 @@ function toggleAutoLogs() {
 
 async function switchToModel(model) {
   pendingModeTarget = 'llm';
-  showToast('info', 'Iniciando cambio a ' + model + '…');
+  showToast('info', t('toast_switch_start', {model}));
   try {
     await apiFetch('/api/mode/switch', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({mode: 'llm', model, wait_for_ready: false}),
     });
-    showToast('ok', 'Cambio iniciado → ' + model);
+    showToast('ok', t('toast_switch_started', {model}));
     setTimeout(refreshAll, 1000);
   } catch (e) {
     pendingModeTarget = null;
@@ -1499,17 +1879,17 @@ async function switchToModel(model) {
 
 async function activateComfy() {
   const ttlEl = document.getElementById('ttl-select');
-  if (!ttlEl) return showToast('err', 'Control TTL no disponible');
+  if (!ttlEl) return showToast('err', t('ttl_control_unavailable'));
   const ttl = parseInt(ttlEl.value, 10);
   pendingModeTarget = 'comfy';
-  showToast('info', 'Activando ComfyUI (' + ttl + ' min)…');
+  showToast('info', t('toast_activate_comfy', {ttl}));
   try {
     await apiFetch('/api/mode/switch', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({mode: 'comfy', ttl_minutes: ttl, wait_for_ready: false}),
     });
-    showToast('ok', 'ComfyUI activándose…');
+    showToast('ok', t('toast_activate_comfy_started'));
     setTimeout(refreshAll, 1000);
   } catch (e) {
     pendingModeTarget = null;
@@ -1519,17 +1899,17 @@ async function activateComfy() {
 
 async function deactivateComfy() {
   const selectEl = document.getElementById('return-model-select');
-  if (!selectEl) return showToast('err', 'Selector de modelo no disponible');
+  if (!selectEl) return showToast('err', t('return_selector_unavailable'));
   const model = selectEl.value;
   pendingModeTarget = 'llm';
-  showToast('info', 'Volviendo a LLM (' + model + ')…');
+  showToast('info', t('toast_deactivate_comfy', {model}));
   try {
     await apiFetch('/api/mode/switch', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({mode: 'llm', model, wait_for_ready: false}),
     });
-    showToast('ok', 'Retornando a LLM…');
+    showToast('ok', t('toast_deactivate_comfy_started'));
     setTimeout(refreshAll, 1000);
   } catch (e) {
     pendingModeTarget = null;
@@ -1539,13 +1919,13 @@ async function deactivateComfy() {
 
 async function preemptComfy() {
   pendingModeTarget = 'llm';
-  showToast('info', 'Preemption: forzando retorno a LLM…');
+  showToast('info', t('toast_preempt'));
   try {
     await apiFetch('/api/mode/release', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
     });
-    showToast('ok', 'Preemption iniciado');
+    showToast('ok', t('toast_preempt_started'));
     setTimeout(refreshAll, 1000);
   } catch (e) {
     pendingModeTarget = null;
