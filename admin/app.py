@@ -1044,6 +1044,7 @@ let modelsTimer = null;
 let dataTimer = null;
 let logTimer = null;
 let logsBootstrapped = false;
+let pendingModeTarget = null;
 const serverHost = window.location.hostname;
 
 window.addEventListener('DOMContentLoaded', () => {
@@ -1103,6 +1104,7 @@ function doLogout() {
   dataTimer = null;
   logTimer = null;
   logsBootstrapped = false;
+  pendingModeTarget = null;
   document.getElementById('app').style.display = 'none';
   document.getElementById('login-screen').style.display = 'flex';
 }
@@ -1146,6 +1148,7 @@ async function refreshStatus() {
   try {
     const data = await apiFetch('/api/status/full');
     statusData = data;
+    if (!data.switch_in_progress) pendingModeTarget = null;
     renderStatus(data);
     ensureLogContainerOptions();
     if (!logsBootstrapped) {
@@ -1326,6 +1329,7 @@ function renderComfySection() {
   const comfyRunning = statusData?.comfyui?.status === 'running' || aiModelsData?.comfyui?.status === 'running';
   const lease = statusData?.mode?.lease || aiModelsData?.mode?.lease;
   const switchInProgress = Boolean(statusData?.switch_in_progress || aiModelsData?.switch_in_progress);
+  const comfyTransition = switchInProgress && (pendingModeTarget === 'comfy' || mode === 'comfy');
 
   const chipEl = document.getElementById('comfy-status-chip');
   const linkRow = document.getElementById('comfy-link-row');
@@ -1341,7 +1345,7 @@ function renderComfySection() {
     document.getElementById('comfy-expires').textContent = lease?.expires_at ? new Date(lease.expires_at).toLocaleTimeString() : 'sin límite';
     inactiveCtrl.style.display = 'none';
     activeCtrl.style.display = 'block';
-  } else if (switchInProgress) {
+  } else if (comfyTransition) {
     chipEl.innerHTML = '<span class="status-chip chip-loading">⏳ Cambiando…</span>';
     linkRow.style.display = 'none';
     inactiveCtrl.style.display = 'none';
@@ -1475,6 +1479,7 @@ function toggleAutoLogs() {
 }
 
 async function switchToModel(model) {
+  pendingModeTarget = 'llm';
   showToast('info', 'Iniciando cambio a ' + model + '…');
   try {
     await apiFetch('/api/mode/switch', {
@@ -1485,12 +1490,14 @@ async function switchToModel(model) {
     showToast('ok', 'Cambio iniciado → ' + model);
     setTimeout(refreshAll, 1000);
   } catch (e) {
+    pendingModeTarget = null;
     showToast('err', e.message);
   }
 }
 
 async function activateComfy() {
   const ttl = parseInt(document.getElementById('ttl-select').value, 10);
+  pendingModeTarget = 'comfy';
   showToast('info', 'Activando ComfyUI (' + ttl + ' min)…');
   try {
     await apiFetch('/api/mode/switch', {
@@ -1501,12 +1508,14 @@ async function activateComfy() {
     showToast('ok', 'ComfyUI activándose…');
     setTimeout(refreshAll, 1000);
   } catch (e) {
+    pendingModeTarget = null;
     showToast('err', e.message);
   }
 }
 
 async function deactivateComfy() {
   const model = document.getElementById('return-model-select').value;
+  pendingModeTarget = 'llm';
   showToast('info', 'Volviendo a LLM (' + model + ')…');
   try {
     await apiFetch('/api/mode/switch', {
@@ -1517,11 +1526,13 @@ async function deactivateComfy() {
     showToast('ok', 'Retornando a LLM…');
     setTimeout(refreshAll, 1000);
   } catch (e) {
+    pendingModeTarget = null;
     showToast('err', e.message);
   }
 }
 
 async function preemptComfy() {
+  pendingModeTarget = 'llm';
   showToast('info', 'Preemption: forzando retorno a LLM…');
   try {
     await apiFetch('/api/mode/release', {
@@ -1531,6 +1542,7 @@ async function preemptComfy() {
     showToast('ok', 'Preemption iniciado');
     setTimeout(refreshAll, 1000);
   } catch (e) {
+    pendingModeTarget = null;
     showToast('err', e.message);
   }
 }
