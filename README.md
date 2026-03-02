@@ -10,13 +10,28 @@ litellm-config.yml          # Config LiteLLM → vLLM (producción)
 litellm-config.local.yml    # Config LiteLLM → Ollama (local)
 Makefile                    # Atajos local-* y prod-*
 Makefile.ops                # Comandos operativos (VPN/SSH)
+versions.lock               # Lock de versiones de imagen consumido por Makefile
 control/                    # API HTTP para cambiar modelos y modo llm/comfy
 control/Dockerfile          # Imagen del model switcher
+scripts/prod_test_auto.sh   # Batería automática de validación en producción
+compatibility-matrix.md     # Matriz de compatibilidad de modelos/runtime
 ```
 
 ## Regla operativa
 
 Usa siempre `make` para operaciones de Docker en este proyecto.
+
+Las versiones de imagen se gobiernan desde `versions.lock` (incluido por `Makefile`).
+
+## Versionado de imágenes
+
+Actualiza tags en `versions.lock` y usa el flujo canary:
+
+```bash
+make prod-upgrade-precheck
+make prod-upgrade-canary
+MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-upgrade-verify
+```
 
 ## Producción (servidor con GPU)
 
@@ -58,6 +73,26 @@ Si cambias `docker-compose.prod.yml` (imagen/env/runtime GPU), recrea contenedor
 ```bash
 make prod-down
 make prod-init
+```
+
+### Upgrade canary (automatizado)
+
+```bash
+make prod-upgrade-precheck
+make prod-upgrade-canary
+MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-upgrade-verify
+```
+
+Atajo todo-en-uno:
+
+```bash
+MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-upgrade-promote
+```
+
+Rollback:
+
+```bash
+make prod-upgrade-rollback ROLLBACK_REF=<git-ref-estable>
 ```
 
 ### Preflight GPU antes de activar ComfyUI
@@ -162,10 +197,12 @@ MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-status
 ```bash
 MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-list-models
 MODEL_SWITCHER_TOKEN=tu_token_seguro HF_URL=https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-AWQ make prod-register-model
+MODEL_SWITCHER_TOKEN=tu_token_seguro MODEL=<id-dinamico> make prod-unregister-model
 MODEL_SWITCHER_TOKEN=tu_token_seguro MODEL=qwen-fast make prod-switch
 MODEL_SWITCHER_TOKEN=tu_token_seguro MODEL=qwen-fast make prod-switch-async
 MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-status
 MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-mode-status
+MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-test-auto
 make prod-admin-url
 ```
 
@@ -175,7 +212,8 @@ make prod-admin-url
 - `GET /healthz/ready` (solo `ready` cuando el modo activo es `llm`)
 - `GET /admin` (UI minima para operaciones de modo)
 - `GET /models`
-- `POST /models/register` body: `{"huggingface_url":"https://huggingface.co/org/repo","model_id":"opcional","litellm_model":"opcional","quantization":"opcional","gpu_memory_utilization":0.9,"max_model_len":4096,"max_num_seqs":1}`
+- `POST /models/register` body: `{"huggingface_url":"https://huggingface.co/org/repo","model_id":"opcional","litellm_model":"opcional","quantization":"opcional","gpu_memory_utilization":0.9,"max_model_len":4096,"max_num_seqs":1,"trust_remote_code":false,"tokenizer":"opcional","revision":"opcional","dtype":"opcional","vllm_image":"opcional","extra_args":["--enforce-eager"]}`
+- `DELETE /models/{model_id}` (solo dinámicos)
 - `GET /status`
 - `GET /mode`
 - `POST /switch` body: `{"model":"<id-en-/models>","wait_for_ready":true|false}`
@@ -187,6 +225,19 @@ make prod-admin-url
 - acepta URL de Hugging Face (`huggingface.co/org/repo` o `org/repo`)
 - genera template LiteLLM automáticamente
 - registra el modelo en el switcher y crea contenedor vLLM dinámico on-demand
+- `trust_remote_code=true` requiere política habilitada y repo en allowlist (`MODEL_SWITCHER_TRUSTED_REPOS`)
+
+Ejemplo con `trust_remote_code`:
+
+```bash
+MODEL_SWITCHER_TOKEN=tu_token_seguro \
+HF_URL=https://huggingface.co/org/repo \
+MODEL_ID=modelo-avanzado \
+TRUST_REMOTE_CODE=true \
+TOKENIZER=org/tokenizer-base \
+REVISION=main \
+make prod-register-model
+```
 
 `POST /switch`:
 - `wait_for_ready=true` (default): respuesta bloqueante hasta éxito/error con estado final.
@@ -276,6 +327,22 @@ make prod-test
 - En `comfy`, ejecuta `GET /system_stats` contra ComfyUI.
 
 En ambos casos imprime la llamada que ha usado para verificar.
+
+## Batería automática (canary gate)
+
+```bash
+MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-test-auto
+```
+
+Modo extensivo (incluye drill de fallo/rollback controlado):
+
+```bash
+MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-test-auto-ext
+```
+
+Artefactos:
+- `artifacts/prod-test-auto-<timestamp>.log`
+- `artifacts/prod-test-auto-<timestamp>.json`
 
 ## Comandos operativos (VPN/SSH)
 

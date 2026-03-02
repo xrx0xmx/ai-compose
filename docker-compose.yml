@@ -4,7 +4,7 @@
 # ============================================================
 services:
   postgres:
-    image: postgres:16-alpine
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
     container_name: postgres
     entrypoint: ["/scripts/pg-entrypoint.sh"]
     environment:
@@ -22,7 +22,7 @@ services:
     restart: unless-stopped
 
   litellm:
-    image: litellm/litellm:latest
+    image: ${LITELLM_IMAGE:-litellm/litellm:main-stable}
     container_name: litellm
     ports:
       - "4000:4000"
@@ -35,7 +35,7 @@ services:
     restart: unless-stopped
 
   open-webui:
-    image: ghcr.io/open-webui/open-webui:latest
+    image: ${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:main}
     container_name: open-webui
     ports:
       - "3000:8080"

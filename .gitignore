@@ -1,6 +1,7 @@
 data/
 .env
 litellm-active.yml
+artifacts/
 
 # Python cache
 __pycache__/

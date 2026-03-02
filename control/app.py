@@ -36,6 +36,26 @@ HF_CACHE_HOST_PATH = os.getenv("MODEL_SWITCHER_HF_CACHE_HOST_PATH", "/opt/ai/hf-
 HF_CACHE_CONTAINER_PATH = os.getenv("MODEL_SWITCHER_HF_CACHE_CONTAINER_PATH", "/data/hf-cache")
 DYNAMIC_VLLM_IMAGE = os.getenv("MODEL_SWITCHER_DYNAMIC_VLLM_IMAGE", "vllm/vllm-openai:v0.6.6.post1")
 DYNAMIC_VLLM_DTYPE = os.getenv("MODEL_SWITCHER_DYNAMIC_DTYPE", "half")
+MODEL_SWITCHER_DYNAMIC_ALLOW_TRUST_REMOTE_CODE = os.getenv(
+  "MODEL_SWITCHER_DYNAMIC_ALLOW_TRUST_REMOTE_CODE",
+  "0",
+).strip().lower() in {"1", "true", "yes", "on"}
+MODEL_SWITCHER_TRUSTED_REPOS = {
+  item.strip().lower()
+  for item in os.getenv("MODEL_SWITCHER_TRUSTED_REPOS", "").split(",")
+  if item.strip()
+}
+ALLOWED_DYNAMIC_EXTRA_FLAGS = {
+  "--tensor-parallel-size",
+  "--max-model-len",
+  "--gpu-memory-utilization",
+  "--max-num-seqs",
+  "--tokenizer",
+  "--revision",
+}
+ALLOWED_DYNAMIC_EXTRA_BOOL_FLAGS = {
+  "--enforce-eager",
+}
 
 BASE_MODELS: Dict[str, Dict[str, Any]] = {
   "qwen-fast": {
@@ -72,7 +92,7 @@ MODE_MONITOR_POLL_SECONDS = int(os.getenv("MODEL_SWITCHER_MODE_POLL_INTERVAL_SEC
 FINAL_SWITCH_STATES = {"success", "failed", "rolled_back"}
 UNSET = object()
 
-app = FastAPI(title="AI Model Switcher", version="2.4.0")
+app = FastAPI(title="AI Model Switcher", version="2.5.0")
 
 SWITCH_LOCK = threading.Lock()
 STATE_LOCK = threading.Lock()
@@ -105,6 +125,12 @@ class RegisterHuggingFaceModelRequest(BaseModel):
   gpu_memory_utilization: Optional[float] = None
   max_model_len: Optional[int] = None
   max_num_seqs: Optional[int] = None
+  trust_remote_code: bool = False
+  tokenizer: Optional[str] = None
+  revision: Optional[str] = None
+  dtype: Optional[str] = None
+  vllm_image: Optional[str] = None
+  extra_args: Optional[List[str]] = None
 
 
 def utc_now() -> str:
@@ -171,6 +197,13 @@ def parse_huggingface_repo(value: str) -> str:
   raise HTTPException(status_code=400, detail="invalid huggingface reference; use URL or org/repo")
 
 
+def normalize_repo_slug(value: str) -> str:
+  slug = value.strip().lower()
+  if not re.match(r"^[a-z0-9._-]+/[a-z0-9._-]+$", slug):
+    raise HTTPException(status_code=400, detail="invalid repository slug")
+  return slug
+
+
 def quantization_for_repo(repo: str, requested: Optional[str]) -> Optional[str]:
   if requested is not None:
     value = requested.strip().lower()
@@ -181,6 +214,60 @@ def quantization_for_repo(repo: str, requested: Optional[str]) -> Optional[str]:
   if "gptq" in lowered:
     return "gptq"
   return None
+
+
+def normalize_non_empty(value: Optional[str]) -> Optional[str]:
+  if value is None:
+    return None
+  normalized = value.strip()
+  return normalized if normalized else None
+
+
+def validate_extra_args(extra_args: Optional[List[str]]) -> List[str]:
+  if extra_args is None:
+    return []
+  cleaned = [str(item).strip() for item in extra_args if str(item).strip()]
+  if not cleaned:
+    return []
+
+  validated: List[str] = []
+  idx = 0
+  while idx < len(cleaned):
+    token = cleaned[idx]
+    if token in ALLOWED_DYNAMIC_EXTRA_BOOL_FLAGS:
+      validated.append(token)
+      idx += 1
+      continue
+
+    if token not in ALLOWED_DYNAMIC_EXTRA_FLAGS:
+      allowed = ", ".join(sorted(ALLOWED_DYNAMIC_EXTRA_FLAGS | ALLOWED_DYNAMIC_EXTRA_BOOL_FLAGS))
+      raise HTTPException(status_code=400, detail=f"unsupported extra arg '{token}'. Allowed: {allowed}")
+
+    if idx + 1 >= len(cleaned):
+      raise HTTPException(status_code=400, detail=f"missing value for '{token}'")
+
+    value = cleaned[idx + 1]
+    if value.startswith("--"):
+      raise HTTPException(status_code=400, detail=f"missing value for '{token}'")
+
+    validated.extend([token, value])
+    idx += 2
+
+  return validated
+
+
+def validate_trust_remote_code(trust_remote_code: bool, hf_repo: str) -> bool:
+  if not trust_remote_code:
+    return False
+  if not MODEL_SWITCHER_DYNAMIC_ALLOW_TRUST_REMOTE_CODE:
+    raise HTTPException(status_code=400, detail="trust_remote_code is disabled by policy")
+  normalized_repo = normalize_repo_slug(hf_repo)
+  if normalized_repo not in MODEL_SWITCHER_TRUSTED_REPOS:
+    raise HTTPException(
+      status_code=400,
+      detail=f"trust_remote_code is only allowed for trusted repos. Missing: {normalized_repo}",
+    )
+  return True
 
 
 def model_template_path(model_meta: Dict[str, Any]) -> str:
@@ -207,6 +294,24 @@ def render_litellm_template(*, litellm_model: str, hf_repo: str, container_name:
     "  master_key: \"cambiaLAclave\"\n"
     "  database_url: \"os.environ/DATABASE_URL\"\n"
   )
+
+
+def model_public_payload(model_id: str, meta: Dict[str, Any]) -> Dict[str, Any]:
+  return {
+    "id": model_id,
+    "container": meta["container"],
+    "template": meta["template"],
+    "litellm_model": meta["litellm_model"],
+    "hf_repo": meta.get("hf_repo"),
+    "dynamic": bool(meta.get("dynamic", False)),
+    "vllm_image": meta.get("vllm_image"),
+    "dtype": meta.get("dtype"),
+    "quantization": meta.get("quantization"),
+    "trust_remote_code": bool(meta.get("trust_remote_code", False)),
+    "tokenizer": meta.get("tokenizer"),
+    "revision": meta.get("revision"),
+    "extra_args": list(meta.get("extra_args", [])),
+  }
 
 
 def read_registry() -> Dict[str, Any]:
@@ -261,6 +366,11 @@ def load_dynamic_models() -> Dict[str, Dict[str, Any]]:
     except (TypeError, ValueError):
       continue
 
+    try:
+      extra_args = validate_extra_args(item.get("extra_args")) if isinstance(item.get("extra_args"), list) else []
+    except HTTPException:
+      continue
+
     dynamic[normalized_id] = {
       "container": container.strip(),
       "template": template.strip(),
@@ -268,11 +378,15 @@ def load_dynamic_models() -> Dict[str, Dict[str, Any]]:
       "hf_repo": hf_repo.strip(),
       "dynamic": True,
       "vllm_image": str(item.get("vllm_image") or DYNAMIC_VLLM_IMAGE),
-      "dtype": str(item.get("dtype") or DYNAMIC_VLLM_DTYPE),
+      "dtype": str(item.get("dtype") or DYNAMIC_VLLM_DTYPE).strip(),
       "quantization": item.get("quantization"),
       "gpu_memory_utilization": gpu_memory_utilization,
       "max_model_len": max_model_len,
       "max_num_seqs": max_num_seqs,
+      "trust_remote_code": bool(item.get("trust_remote_code", False)),
+      "tokenizer": normalize_non_empty(item.get("tokenizer")),
+      "revision": normalize_non_empty(item.get("revision")),
+      "extra_args": extra_args,
     }
   return dynamic
 
@@ -311,11 +425,38 @@ def persist_dynamic_model(model_id: str, model_meta: Dict[str, Any]) -> None:
       "gpu_memory_utilization": model_meta["gpu_memory_utilization"],
       "max_model_len": model_meta["max_model_len"],
       "max_num_seqs": model_meta["max_num_seqs"],
+      "trust_remote_code": bool(model_meta.get("trust_remote_code", False)),
+      "tokenizer": model_meta.get("tokenizer"),
+      "revision": model_meta.get("revision"),
+      "extra_args": list(model_meta.get("extra_args", [])),
     }
   )
   payload["models"] = filtered
   payload["version"] = 1
   write_registry(payload)
+
+
+def remove_dynamic_model_from_registry(model_id: str) -> bool:
+  payload = read_registry()
+  models_raw = payload.get("models", [])
+  models: List[Dict[str, Any]] = [item for item in models_raw if isinstance(item, dict)]
+
+  filtered: List[Dict[str, Any]] = []
+  removed = False
+  for item in models:
+    try:
+      existing_id = normalize_model_id(str(item.get("id", "")))
+    except ValueError:
+      continue
+    if existing_id == model_id:
+      removed = True
+      continue
+    filtered.append(item)
+
+  payload["models"] = filtered
+  payload["version"] = 1
+  write_registry(payload)
+  return removed
 
 
 def build_dynamic_model(
@@ -357,6 +498,12 @@ def build_dynamic_model(
 
   template_name = f"{model_id}.yml"
   quantization = quantization_for_repo(hf_repo, req.quantization)
+  trust_remote_code = validate_trust_remote_code(bool(req.trust_remote_code), hf_repo)
+  tokenizer = normalize_non_empty(req.tokenizer)
+  revision = normalize_non_empty(req.revision)
+  dtype = normalize_non_empty(req.dtype) or DYNAMIC_VLLM_DTYPE
+  vllm_image = normalize_non_empty(req.vllm_image) or DYNAMIC_VLLM_IMAGE
+  extra_args = validate_extra_args(req.extra_args)
   return {
     "id": model_id,
     "container": f"vllm-{model_id}",
@@ -364,12 +511,16 @@ def build_dynamic_model(
     "litellm_model": litellm_model,
     "hf_repo": hf_repo,
     "dynamic": True,
-    "vllm_image": DYNAMIC_VLLM_IMAGE,
-    "dtype": DYNAMIC_VLLM_DTYPE,
+    "vllm_image": vllm_image,
+    "dtype": dtype,
     "quantization": quantization,
     "gpu_memory_utilization": float(gpu_memory),
     "max_model_len": int(max_model_len),
     "max_num_seqs": int(max_num_seqs),
+    "trust_remote_code": trust_remote_code,
+    "tokenizer": tokenizer,
+    "revision": revision,
+    "extra_args": extra_args,
   }
 
 
@@ -815,12 +966,24 @@ def dynamic_container_spec(model_meta: Dict[str, Any]) -> Dict[str, Any]:
   ]
   if quantization:
     command.extend(["--quantization", quantization])
+  if model_meta.get("trust_remote_code"):
+    command.append("--trust-remote-code")
+  tokenizer = normalize_non_empty(model_meta.get("tokenizer"))
+  if tokenizer:
+    command.extend(["--tokenizer", tokenizer])
+  revision = normalize_non_empty(model_meta.get("revision"))
+  if revision:
+    command.extend(["--revision", revision])
+  extra_args = model_meta.get("extra_args", [])
+  if isinstance(extra_args, list):
+    command.extend([str(item) for item in extra_args if str(item).strip()])
 
   return {
     "Image": str(model_meta.get("vllm_image") or DYNAMIC_VLLM_IMAGE),
     "Cmd": command,
     "Env": [
       f"HUGGING_FACE_HUB_CACHE={HF_CACHE_CONTAINER_PATH}",
+      f"HF_HOME={HF_CACHE_CONTAINER_PATH}",
     ],
     "HostConfig": {
       "Runtime": "nvidia",
@@ -2289,6 +2452,11 @@ __MODEL_OPTIONS__
       <div class="row">
         <input id="hfUrl" type="text" placeholder="https://huggingface.co/org/repo">
         <input id="hfModelId" type="text" placeholder="model-id (opcional)">
+        <input id="hfTokenizer" type="text" placeholder="tokenizer (opcional)">
+        <input id="hfRevision" type="text" placeholder="revision (opcional)">
+        <label style="font-size:13px;display:inline-flex;gap:6px;align-items:center;">
+          <input id="hfTrustRemoteCode" type="checkbox"> trust_remote_code
+        </label>
         <button id="registerModel" class="primary">Registrar modelo HF</button>
       </div>
       <p class="hint">Crea template LiteLLM, registra modelo dinámico y prepara su contenedor vLLM.</p>
@@ -2375,11 +2543,17 @@ __MODEL_OPTIONS__
     async function registerModelFromHF() {
       const huggingface_url = document.getElementById("hfUrl").value.trim();
       const model_id_raw = document.getElementById("hfModelId").value.trim();
+      const tokenizer_raw = document.getElementById("hfTokenizer").value.trim();
+      const revision_raw = document.getElementById("hfRevision").value.trim();
+      const trust_remote_code = document.getElementById("hfTrustRemoteCode").checked;
       if (!huggingface_url) {
         throw new Error("URL de Hugging Face requerida");
       }
       const body = { huggingface_url };
       if (model_id_raw) body.model_id = model_id_raw;
+      if (tokenizer_raw) body.tokenizer = tokenizer_raw;
+      if (revision_raw) body.revision = revision_raw;
+      if (trust_remote_code) body.trust_remote_code = true;
       const payload = await api("POST", "/models/register", body);
       outputEl.textContent = JSON.stringify(payload, null, 2);
       window.location.reload();
@@ -2425,14 +2599,7 @@ def ready() -> Dict[str, str]:
 def models() -> Dict[str, Any]:
   return {
     "models": [
-      {
-        "id": model_id,
-        "container": meta["container"],
-        "template": meta["template"],
-        "litellm_model": meta["litellm_model"],
-        "hf_repo": meta.get("hf_repo"),
-        "dynamic": bool(meta.get("dynamic", False)),
-      }
+      model_public_payload(model_id, meta)
       for model_id, meta in MODELS.items()
     ]
   }
@@ -2462,20 +2629,7 @@ def register_huggingface_model(req: RegisterHuggingFaceModelRequest) -> Dict[str
     ensure_model_container_created(model_id)
   except Exception as exc:
     try:
-      payload = read_registry()
-      models_raw = payload.get("models", [])
-      models = [item for item in models_raw if isinstance(item, dict)]
-      filtered: List[Dict[str, Any]] = []
-      for item in models:
-        try:
-          existing_id = normalize_model_id(str(item.get("id", "")))
-        except ValueError:
-          continue
-        if existing_id != model_id:
-          filtered.append(item)
-      payload["models"] = filtered
-      payload["version"] = 1
-      write_registry(payload)
+      remove_dynamic_model_from_registry(model_id)
     except Exception:
       pass
     MODELS = previous_models
@@ -2484,19 +2638,45 @@ def register_huggingface_model(req: RegisterHuggingFaceModelRequest) -> Dict[str
 
   return {
     "status": "created",
-    "model": {
-      "id": model_id,
-      "container": model_meta["container"],
-      "template": model_meta["template"],
-      "litellm_model": model_meta["litellm_model"],
-      "hf_repo": model_meta["hf_repo"],
-      "dynamic": True,
-    },
+    "model": model_public_payload(model_id, model_meta),
     "next": {
       "switch_endpoint": "/switch",
       "payload": {"model": model_id, "wait_for_ready": True},
     },
   }
+
+
+@app.delete("/models/{model_id}", dependencies=[Depends(require_token)])
+def unregister_model(model_id: str) -> Dict[str, Any]:
+  try:
+    normalized = normalize_model_id(model_id)
+  except ValueError as exc:
+    raise HTTPException(status_code=400, detail=str(exc)) from exc
+  model_meta = MODELS.get(normalized)
+  if model_meta is None:
+    raise HTTPException(status_code=404, detail="model not found")
+  if not model_meta.get("dynamic"):
+    raise HTTPException(status_code=400, detail="built-in models cannot be removed")
+
+  current = active_model()
+  if current == normalized:
+    raise HTTPException(status_code=409, detail="cannot remove active model; switch first")
+
+  container_name = str(model_meta["container"])
+  template_path = model_template_path(model_meta)
+
+  container_stop(container_name)
+  resp = docker_request("DELETE", f"/containers/{quote(container_name, safe='')}?force=true")
+  if resp.status_code not in {204, 404}:
+    raise HTTPException(status_code=500, detail=f"failed to delete container: {resp.text}")
+
+  remove_file(template_path)
+  removed = remove_dynamic_model_from_registry(normalized)
+  if not removed:
+    raise HTTPException(status_code=500, detail="registry update failed")
+
+  reload_models_registry()
+  return {"status": "deleted", "model_id": normalized}
 
 
 @app.get("/status", dependencies=[Depends(require_token)])

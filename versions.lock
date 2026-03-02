@@ -1,0 +1,18 @@
+# Image lock consumed by Makefile (`-include versions.lock`).
+# Keep this file committed and versioned. Use explicit tags when possible.
+
+POSTGRES_IMAGE=postgres:16-alpine
+LITELLM_IMAGE=litellm/litellm:main-stable
+OPENWEBUI_IMAGE=ghcr.io/open-webui/open-webui:main
+DOCKER_SOCKET_PROXY_IMAGE=tecnativa/docker-socket-proxy:0.1.1
+
+VLLM_IMAGE_FAST=vllm/vllm-openai:v0.5.4
+VLLM_IMAGE_QUALITY=vllm/vllm-openai:v0.5.4
+VLLM_IMAGE_DEEPSEEK=vllm/vllm-openai:v0.6.6.post1
+VLLM_IMAGE_QWEN_MAX=vllm/vllm-openai:v0.5.4
+
+COMFYUI_IMAGE=yanwk/comfyui-boot:cu126-slim
+MODEL_SWITCHER_DYNAMIC_VLLM_IMAGE=vllm/vllm-openai:v0.6.6.post1
+MODEL_SWITCHER_DYNAMIC_DTYPE=half
+MODEL_SWITCHER_DYNAMIC_ALLOW_TRUST_REMOTE_CODE=0
+MODEL_SWITCHER_TRUSTED_REPOS=

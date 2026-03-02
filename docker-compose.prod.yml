@@ -18,7 +18,7 @@ services:
       - litellm-config:/config
 
   docker-socket-proxy:
-    image: tecnativa/docker-socket-proxy:0.1.1
+    image: ${DOCKER_SOCKET_PROXY_IMAGE:-tecnativa/docker-socket-proxy:0.1.1}
     container_name: docker-socket-proxy
     environment:
       - CONTAINERS=1
@@ -55,6 +55,10 @@ services:
       - MODEL_SWITCHER_COMFY_DEFAULT_TTL_MINUTES=${MODEL_SWITCHER_COMFY_DEFAULT_TTL_MINUTES:-45}
       - MODEL_SWITCHER_COMFY_MAX_TTL_MINUTES=${MODEL_SWITCHER_COMFY_MAX_TTL_MINUTES:-90}
       - MODEL_SWITCHER_MODE_POLL_INTERVAL_SECONDS=${MODEL_SWITCHER_MODE_POLL_INTERVAL_SECONDS:-5}
+      - MODEL_SWITCHER_DYNAMIC_VLLM_IMAGE=${MODEL_SWITCHER_DYNAMIC_VLLM_IMAGE:-vllm/vllm-openai:v0.6.6.post1}
+      - MODEL_SWITCHER_DYNAMIC_DTYPE=${MODEL_SWITCHER_DYNAMIC_DTYPE:-half}
+      - MODEL_SWITCHER_DYNAMIC_ALLOW_TRUST_REMOTE_CODE=${MODEL_SWITCHER_DYNAMIC_ALLOW_TRUST_REMOTE_CODE:-0}
+      - MODEL_SWITCHER_TRUSTED_REPOS=${MODEL_SWITCHER_TRUSTED_REPOS:-}
     depends_on:
       - docker-socket-proxy
     volumes:
@@ -80,7 +84,7 @@ services:
 
   # vLLM FAST (Qwen 7B AWQ) — concurrencia 4, rápido
   vllm-fast:
-    image: vllm/vllm-openai:v0.5.4
+    image: ${VLLM_IMAGE_FAST:-vllm/vllm-openai:v0.5.4}
     container_name: vllm-fast
     runtime: nvidia
     ports:
@@ -111,7 +115,7 @@ services:
 
   # vLLM QUALITY (Qwen 14B AWQ) — solo cuando lo necesites
   vllm-quality:
-    image: vllm/vllm-openai:v0.5.4
+    image: ${VLLM_IMAGE_QUALITY:-vllm/vllm-openai:v0.5.4}
     container_name: vllm-quality
     runtime: nvidia
     ports:
@@ -142,7 +146,7 @@ services:
 
   # vLLM DEEPSEEK (DeepSeek-R1-Distill-Qwen-14B AWQ) — razonamiento
   vllm-deepseek:
-    image: vllm/vllm-openai:v0.6.6.post1
+    image: ${VLLM_IMAGE_DEEPSEEK:-vllm/vllm-openai:v0.6.6.post1}
     container_name: vllm-deepseek
     runtime: nvidia
     ports:
@@ -173,7 +177,7 @@ services:
 
   # vLLM QWEN-MAX (Qwen 2.5-32B AWQ) — máxima calidad
   vllm-qwen32b:
-    image: vllm/vllm-openai:v0.5.4
+    image: ${VLLM_IMAGE_QWEN_MAX:-vllm/vllm-openai:v0.5.4}
     container_name: vllm-qwen32b
     runtime: nvidia
     ports:
