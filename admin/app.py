@@ -6,6 +6,7 @@ import os
 import sqlite3
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -203,6 +204,23 @@ def parse_boolish(value: Any) -> bool:
     return text in {"1", "true", "yes", "y", "on"}
 
 
+URL_RE = re.compile(r"https?://[^\s'\"<>]+")
+HOST_PORT_RE = re.compile(r"(?:(?:\d{1,3}\.){3}\d{1,3}|[A-Za-z0-9][A-Za-z0-9\.-]*):\d{2,5}")
+QUOTED_HOST_RE = re.compile(r"host='[^']+'")
+PORT_RE = re.compile(r"port=\d{2,5}")
+
+
+def sanitize_public_error(message: Any) -> str:
+    text = str(message or "").strip()
+    if not text:
+        return "error"
+    text = URL_RE.sub("[hidden-url]", text)
+    text = HOST_PORT_RE.sub("[hidden-host]", text)
+    text = QUOTED_HOST_RE.sub("host='[hidden-host]'", text)
+    text = PORT_RE.sub("port=[hidden-port]", text)
+    return text
+
+
 def table_exists(conn: sqlite3.Connection, table: str) -> bool:
     cur = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1",
@@ -234,7 +252,7 @@ def fetch_webui_data(days: int = 14) -> Tuple[Dict[str, Any], List[Dict[str, Any
         "messages_total": None,
         "messages_24h": None,
         "source": {
-            "openwebui_db": WEBUI_DB_PATH,
+            "kind": "openwebui_sqlite",
             "ok": True,
             "error": None,
         },
@@ -297,7 +315,7 @@ def fetch_webui_data(days: int = 14) -> Tuple[Dict[str, Any], List[Dict[str, Any
                     overview["messages_24h"] = count_24h
     except Exception as exc:
         overview["source"]["ok"] = False
-        overview["source"]["error"] = str(exc)
+        overview["source"]["error"] = sanitize_public_error(exc)
         logger.warning("Open WebUI metrics unavailable: %s", exc)
     finally:
         try:
@@ -316,7 +334,7 @@ def fetch_litellm_metrics() -> Dict[str, Any]:
         "tokens_24h": None,
         "requests_total": None,
         "source": {
-            "litellm_url": LITELLM_URL,
+            "kind": "litellm_metrics",
             "ok": False,
             "error": "metrics unavailable",
         },
@@ -330,7 +348,7 @@ def fetch_litellm_metrics() -> Dict[str, Any]:
         resp.raise_for_status()
         metrics_text = resp.text
     except Exception as exc:
-        result["source"]["error"] = str(exc)
+        result["source"]["error"] = sanitize_public_error(exc)
         return result
 
     totals: Dict[str, float] = {
@@ -1091,6 +1109,7 @@ const I18N = {
     data_no_series: 'Sin datos de serie temporal.',
     source_ok: 'ok',
     source_degraded: 'degradado',
+    source_check_logs: 'revisa logs',
     logs_loading: 'Cargando…',
     logs_empty: '(sin output)',
     logs_error: 'Error: {error}',
@@ -1187,6 +1206,7 @@ const I18N = {
     data_no_series: 'Sense dades de sèrie temporal.',
     source_ok: 'ok',
     source_degraded: 'degradat',
+    source_check_logs: 'revisa logs',
     logs_loading: 'Carregant…',
     logs_empty: '(sense sortida)',
     logs_error: 'Error: {error}',
@@ -1283,6 +1303,7 @@ const I18N = {
     data_no_series: 'No time-series data.',
     source_ok: 'ok',
     source_degraded: 'degraded',
+    source_check_logs: 'check logs',
     logs_loading: 'Loading…',
     logs_empty: '(no output)',
     logs_error: 'Error: {error}',
@@ -1781,7 +1802,7 @@ function renderData() {
     const line = document.createElement('div');
     line.className = 'source-item';
     const ok = payload?.ok ? t('source_ok') : t('source_degraded');
-    const detail = payload?.error ? ` · ${payload.error}` : '';
+    const detail = payload?.error ? ` · ${t('source_check_logs')}` : '';
     line.textContent = `${name}: ${ok}${detail}`;
     srcEl.appendChild(line);
   });
