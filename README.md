@@ -6,6 +6,7 @@
 docker-compose.yml          # Base: LiteLLM + Open WebUI
 docker-compose.local.yml    # Override local: Ollama (Mac, sin GPU)
 docker-compose.prod.yml     # Override prod: vLLM + ComfyUI + NVIDIA GPU
+.env.example                # Plantilla de variables requeridas en prod
 litellm-config.yml          # Config LiteLLM → vLLM (producción)
 litellm-config.local.yml    # Config LiteLLM → Ollama (local)
 Makefile                    # Atajos local-* y prod-*
@@ -13,6 +14,7 @@ Makefile.ops                # Comandos operativos (VPN/SSH)
 versions.lock               # Lock de versiones de imagen consumido por Makefile
 control/                    # API HTTP para cambiar modelos y modo llm/comfy
 control/Dockerfile          # Imagen del model switcher
+ops/nginx/                  # Config edge proxy Nginx (80/443)
 scripts/prod_test_auto.sh   # Batería automática de validación en producción
 compatibility-matrix.md     # Matriz de compatibilidad de modelos/runtime
 ```
@@ -23,15 +25,67 @@ Usa siempre `make` para operaciones de Docker en este proyecto.
 
 Las versiones de imagen se gobiernan desde `versions.lock` (incluido por `Makefile`).
 
-## Versionado de imágenes
-
-Actualiza tags en `versions.lock` y usa el flujo canary:
+## Comandos simplificados (recomendados)
 
 ```bash
+# Arranque por bloques
+make up MODE=all
+make up MODE=infra
+make up MODE=models
+
+# Parada / reset
+make down
+make purge CONFIRM=YES SCOPE=project
+# make purge CONFIRM=YES SCOPE=host   # destructivo a nivel host
+
+# Logs
+make logs TARGET=all TAIL=200
+make logs TARGET=litellm TAIL=200
+make logs TARGET=vllm-<id-dinamico> TAIL=200
+
+# Control independiente de servicio/contenedor
+make start TARGET=admin-panel
+make stop TARGET=admin-panel
+```
+
+## Versionado de imágenes
+
+En producción, `LITELLM_IMAGE` y `OPENWEBUI_IMAGE` deben ir fijadas por digest (`@sha256`).
+
+Flujo recomendado para refrescar digests en `versions.lock`:
+
+```bash
+docker buildx imagetools inspect litellm/litellm:v1.81.15
+docker buildx imagetools inspect ghcr.io/open-webui/open-webui:main
+# copiar el campo "Digest:" a versions.lock como imagen@sha256:...
+```
+
+Después valida el lock antes de desplegar:
+
+```bash
+make prod-image-lock-check
 make prod-upgrade-precheck
 make prod-upgrade-canary
 MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-upgrade-verify
 ```
+
+## Entorno requerido (producción)
+
+Usa `.env.example` como plantilla y define todos los secretos:
+
+```bash
+cp .env.example .env
+$EDITOR .env
+```
+
+Validación de entorno:
+
+```bash
+make prod-preflight-env
+```
+
+`prod-preflight-env` falla si falta una variable requerida, si hay placeholders inseguros o si la entropía mínima no se cumple.
+`MODEL_SWITCHER_ADMIN_TOKEN` queda deprecado y no se usa en flujo operativo.
 
 ## Producción (servidor con GPU)
 
@@ -67,6 +121,15 @@ make prod-init
 ```
 
 Esto levanta servicios base y crea contenedores de modelos/comfy.
+
+### Pre-deploy recomendado (week1 gate)
+
+```bash
+cp .env .env.backup.$(date +%Y%m%d%H%M%S)
+cp versions.lock versions.lock.backup.$(date +%Y%m%d%H%M%S)
+make prod-preflight-env
+make prod-image-lock-check
+```
 
 Si cambias `docker-compose.prod.yml` (imagen/env/runtime GPU), recrea contenedores:
 
@@ -253,12 +316,20 @@ make prod-register-model
 - modo activo (`llm|comfy`) y lease de ComfyUI (`expires_at`, `remaining_seconds`, `expired`)
 - estado de `litellm`, `comfyui`, `running_models` y switch en curso
 
-## Publicación directa por puertos (sin gateway Nginx)
+## Publicación por edge proxy (80/443 only)
 
-El stack productivo publica directamente en host:
-- `http://<host>:80/admin` -> panel admin
-- `http://<host>:3000` -> OpenWebUI
-- `http://<host>:8188` -> ComfyUI (cuando está activo)
+El stack productivo expone solo:
+- `https://<host>/` -> OpenWebUI
+- `https://<host>/admin` -> panel admin
+- `https://<host>/comfy/` -> ComfyUI (protegido por sesión admin)
+
+Rutas internas del panel admin (en edge):
+- `/admin-api/*` -> proxy a API backend del admin-panel
+- `/admin-auth/*` -> login/sesión y chequeo de auth para `comfy`
+
+Puertos backend **no expuestos públicamente**: `3000`, `4000`, `8001-8004`, `8188`.
+
+`model-switcher` queda en loopback (`127.0.0.1:9000`) para runbook operativo.
 
 Pasos:
 
@@ -270,16 +341,14 @@ make prod-init
 Validaciones rápidas:
 
 ```bash
-# 3000 debe aparecer; 8188 aparece cuando ComfyUI está activo
-make prod-ports-check
+# valida puertos abiertos/cerrados en host
+make prod-ports-audit
 
-# URLs directas
+# valida rutas del edge proxy
 make prod-proxy-check
 ```
 
-Nota: `:8188` puede no responder cuando ComfyUI está apagado (modo `llm`), y se considera normal.
-
-La UI `/admin` pide token `MODEL_SWITCHER_TOKEN` y usa:
+La UI `/admin` autentica con credenciales admin de Open WebUI (cookie `admin_jwt`) y usa:
 - `POST /mode/switch` para `llm|comfy`
 - `POST /mode/release` para preemption inmediata a LLM
 - `GET /status` + `GET /models` para panel unificado `Estado`, `Modelos IA` y `Data`
@@ -334,12 +403,9 @@ MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-llm-priority
 MODEL_SWITCHER_TOKEN=tu_token_seguro MODEL=deepseek make prod-switch
 ```
 
-4. Verifica respuesta con el id real de LiteLLM (`deepseek-r1`):
+4. Verifica salud final del plano LLM:
 ```bash
-curl -sf http://127.0.0.1:4000/v1/chat/completions \
-  -H "Authorization: Bearer <LITELLM_KEY>" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"deepseek-r1","messages":[{"role":"user","content":"ping"}],"temperature":0}' | jq
+MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-test
 ```
 
 ## Test único de salud
@@ -349,8 +415,8 @@ make prod-test
 ```
 
 `prod-test` autodetecta el modo activo:
-- En `llm`, ejecuta `POST /v1/chat/completions` contra LiteLLM con `active_litellm_model` (o fallback por mapeo `/models`).
-- En `comfy`, ejecuta `GET http://127.0.0.1:8188/system_stats` directamente contra ComfyUI.
+- En `llm`, valida `GET /healthz/ready` del `model-switcher`.
+- En `comfy`, valida `comfyui.status=running` y que no esté `unhealthy` vía `GET /status`.
 
 En ambos casos imprime la llamada que ha usado para verificar.
 
