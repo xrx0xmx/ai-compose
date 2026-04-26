@@ -57,8 +57,8 @@ Antes de desplegar:
 
 ```bash
 make prod-image-lock-check
-make prod-upgrade-precheck
-make prod-upgrade-canary
+ALLOW_LEGACY_POSTGRES_PASSWORD=1 make prod-upgrade-precheck
+ALLOW_LEGACY_POSTGRES_PASSWORD=1 make prod-upgrade-canary
 MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-upgrade-verify
 ```
 
@@ -79,6 +79,15 @@ make prod-preflight-env
 
 `prod-preflight-env` falla si falta una variable requerida, si hay placeholders inseguros o si la entropía mínima no se cumple.
 `MODEL_SWITCHER_ADMIN_TOKEN` queda deprecado y no se usa en flujo operativo.
+
+Excepción legacy para despliegues ya inicializados:
+
+```bash
+ALLOW_LEGACY_POSTGRES_PASSWORD=1 make prod-preflight-env
+```
+
+Usa esta excepción solo si la instancia de Postgres existente ya fue inicializada con `POSTGRES_PASSWORD=changeme_pg`.
+No cambies ese valor en `.env` justo antes de reiniciar: en Postgres ese env var no rota la contraseña real de una base ya creada y puedes desincronizar las apps con la credencial efectiva.
 
 ## Producción (servidor con GPU)
 
@@ -120,7 +129,7 @@ Esto levanta servicios base y crea contenedores de modelos/comfy.
 ```bash
 cp .env .env.backup.$(date +%Y%m%d%H%M%S)
 cp versions.lock versions.lock.backup.$(date +%Y%m%d%H%M%S)
-make prod-preflight-env
+ALLOW_LEGACY_POSTGRES_PASSWORD=1 make prod-preflight-env
 make prod-image-lock-check
 ```
 
@@ -134,15 +143,15 @@ make prod-init
 ### Upgrade canary (automatizado)
 
 ```bash
-make prod-upgrade-precheck
-make prod-upgrade-canary
+ALLOW_LEGACY_POSTGRES_PASSWORD=1 make prod-upgrade-precheck
+ALLOW_LEGACY_POSTGRES_PASSWORD=1 make prod-upgrade-canary
 MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-upgrade-verify
 ```
 
 Atajo todo-en-uno:
 
 ```bash
-MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-upgrade-promote
+ALLOW_LEGACY_POSTGRES_PASSWORD=1 MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-upgrade-promote
 ```
 
 Rollback:
