@@ -6,6 +6,7 @@
 docker-compose.yml          # Base: LiteLLM + Open WebUI
 docker-compose.local.yml    # Override local: Ollama (Mac, sin GPU)
 docker-compose.prod.yml     # Override prod: vLLM + ComfyUI + NVIDIA GPU
+.env.example                # Plantilla de variables requeridas en prod
 litellm-config.yml          # Config LiteLLM → vLLM (producción)
 litellm-config.local.yml    # Config LiteLLM → Ollama (local)
 Makefile                    # Atajos local-* y prod-*
@@ -23,15 +24,61 @@ Usa siempre `make` para operaciones de Docker en este proyecto.
 
 Las versiones de imagen se gobiernan desde `versions.lock` (incluido por `Makefile`).
 
-## Versionado de imágenes
-
-Actualiza tags en `versions.lock` y usa el flujo canary:
+## Comandos simplificados (recomendados)
 
 ```bash
+# Arranque por bloques
+make up MODE=all
+make up MODE=infra
+make up MODE=models
+
+# Parada / reset
+make down
+make purge CONFIRM=YES SCOPE=project
+# make purge CONFIRM=YES SCOPE=host   # destructivo a nivel host
+
+# Logs
+make logs TARGET=all TAIL=200
+make logs TARGET=litellm TAIL=200
+make logs TARGET=vllm-<id-dinamico> TAIL=200
+
+# Control independiente de servicio/contenedor
+make start TARGET=admin-panel
+make stop TARGET=admin-panel
+```
+
+## Versionado de imágenes
+
+En esta release de compatibilidad, `versions.lock` mantiene las imágenes tal como se usan hoy en producción.
+`make prod-image-lock-check` valida que las variables estén definidas y avisa si hay tags no deterministas
+(`latest`/`main`) para dejar el pinning por digest a una fase posterior y probada.
+
+Antes de desplegar:
+
+```bash
+make prod-image-lock-check
 make prod-upgrade-precheck
 make prod-upgrade-canary
 MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-upgrade-verify
 ```
+
+## Entorno requerido (producción)
+
+Usa `.env.example` como plantilla y define todos los secretos:
+
+```bash
+cp .env.example .env
+$EDITOR .env
+```
+
+Validación de entorno:
+
+```bash
+make prod-preflight-env
+```
+
+`prod-preflight-env` falla si falta una variable requerida, si hay placeholders inseguros o si la entropía mínima no se cumple.
+`MODEL_SWITCHER_ADMIN_TOKEN` queda deprecado y no se usa en flujo operativo.
 
 ## Producción (servidor con GPU)
 
@@ -67,6 +114,15 @@ make prod-init
 ```
 
 Esto levanta servicios base y crea contenedores de modelos/comfy.
+
+### Pre-deploy recomendado (week1 gate)
+
+```bash
+cp .env .env.backup.$(date +%Y%m%d%H%M%S)
+cp versions.lock versions.lock.backup.$(date +%Y%m%d%H%M%S)
+make prod-preflight-env
+make prod-image-lock-check
+```
 
 Si cambias `docker-compose.prod.yml` (imagen/env/runtime GPU), recrea contenedores:
 

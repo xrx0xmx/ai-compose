@@ -3,9 +3,14 @@
 # Se incluye desde Makefile para mantener `make vpn-up`, etc.
 # ============================================================
 
+SSH_HOST ?= somia
+SCP_SRC ?= .
+SCP_DEST ?= ~/
+
 vpn-up:     ; sudo wg-quick up somia-adam
 vpn-down:   ; sudo wg-quick down somia-adam
 vpn-status: ; sudo wg show
-ssh:        ; ssh somia
+ssh:        ; ssh $(SSH_HOST)
+scp-home:   ; scp -r "$(SCP_SRC)" "$(SSH_HOST):$(SCP_DEST)"
 
-.PHONY: vpn-up vpn-down vpn-status ssh
+.PHONY: vpn-up vpn-down vpn-status ssh scp-home

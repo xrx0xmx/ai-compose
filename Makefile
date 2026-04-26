@@ -24,12 +24,17 @@ COMFY_TTL ?= 45
 TAIL ?= 200
 SERVICE ?=
 CONTAINER ?=
+MODE ?= all
+TARGET ?= all
+CONFIRM ?= NO
+SCOPE ?= project
 ROLLBACK_REF ?=
 ARTIFACT_DIR ?=
 EXTENSIVE ?= 0
 HOST_BASE_URL ?= http://127.0.0.1
 OPENWEBUI_URL ?= http://127.0.0.1:3000
 COMFYUI_URL ?= http://127.0.0.1:8188
+ADMIN_URL ?= $(HOST_BASE_URL)/admin
 
 -include Makefile.ops
 -include versions.lock
@@ -68,9 +73,30 @@ PROD = cd $(PROD_DIR) && $(PROD_ENV) $(PROD_COMPOSE)
 PROD_BASE_SERVICES = postgres litellm docker-socket-proxy model-switcher open-webui admin-panel
 PROD_MODEL_PROFILES = --profile qwen-fast --profile qwen-quality --profile deepseek --profile qwen-max --profile comfy
 PROD_ALL_PROFILES = --profile webui $(PROD_MODEL_PROFILES)
+PROD_COMPOSE_SERVICES = $(PROD_BASE_SERVICES) vllm-fast vllm-quality vllm-deepseek vllm-qwen32b comfyui
 
 help:
-	@echo "Comandos principales:"
+	@echo "Comandos simplificados (recomendados):"
+	@echo "  make up MODE=all               # levanta todo"
+	@echo "  make up MODE=infra             # solo infraestructura y red"
+	@echo "  make up MODE=models            # solo modelos IA (vLLM/Comfy)"
+	@echo "  make down                      # para todo el stack"
+	@echo "  make purge CONFIRM=YES SCOPE=project   # reset del proyecto"
+	@echo "  make purge CONFIRM=YES SCOPE=host      # reset Docker host (destructivo)"
+	@echo "  make logs TARGET=all TAIL=200"
+	@echo "  make logs TARGET=litellm TAIL=200"
+	@echo "  make logs TARGET=vllm-<id-dinamico> TAIL=200"
+	@echo "  make start TARGET=admin-panel"
+	@echo "  make stop TARGET=admin-panel"
+	@echo ""
+	@echo "VPN/Host:"
+	@echo "  make vpn-up | make vpn-down | make vpn-status | make ssh"
+	@echo "  make scp-home [SCP_SRC=.] [SCP_DEST=~/]"
+	@echo ""
+	@echo "Comandos existentes (compatibilidad):"
+	@echo "  make prod-preflight-env         # valida secretos requeridos y placeholders inseguros"
+	@echo "  make prod-image-lock-check      # valida imagenes configuradas y avisa sobre tags no deterministas"
+	@echo "  make prod-baseline-snapshot     # guarda snapshot operativo en artifacts/week1-baseline"
 	@echo "  make prod-init                  # levanta servicios base y crea contenedores de modelos/comfy"
 	@echo "  make prod-up                    # levanta stack base y asegura contenedores de modelos/comfy"
 	@echo "  make prod-up-admin              # fuerza arranque solo de admin-panel"
@@ -104,20 +130,172 @@ help:
 	@echo "  make prod-upgrade-promote"
 	@echo "  make prod-upgrade-rollback ROLLBACK_REF=<git-ref>"
 	@echo ""
-	@echo "Logs:"
+	@echo "Logs (legacy):"
 	@echo "  make prod-logs-all TAIL=200"
 	@echo "  make prod-logs SERVICE=litellm TAIL=200"
 	@echo "  make prod-logs-container CONTAINER=vllm-... TAIL=200"
-	@echo "  make prod-logs-<servicio> TAIL=200   (ej: prod-logs-model-switcher)"
-	@echo "  make prod-logs-list"
+	@echo "  make prod-logs-<servicio> TAIL=200"
+
+# --- Guardrails de entorno / imagenes ---
+prod-preflight-env:
+	@set -eu; \
+	if [ -f ./.env ]; then \
+	  while IFS='=' read -r raw_key raw_value; do \
+	    case "$$raw_key" in ""|\#*) continue ;; esac; \
+	    key=$$(printf '%s' "$$raw_key" | tr -d ' '); \
+	    [ -n "$$key" ] || continue; \
+	    eval "current=\$${$$key-}"; \
+	    if [ -n "$$current" ]; then \
+	      continue; \
+	    fi; \
+	    value=$$(printf '%s' "$$raw_value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$$//'); \
+	    value=$${value#\"}; \
+	    value=$${value%\"}; \
+	    eval "export $$key=\"$$value\""; \
+	  done < ./.env; \
+	fi; \
+	check_required() { \
+	  name="$$1"; \
+	  eval "value=\$${$$name-}"; \
+	  if [ -z "$$value" ]; then \
+	    echo "ERROR: variable requerida no definida: $$name"; exit 1; \
+	  fi; \
+	  case "$$value" in \
+	    change_me|cambiaLAclave|changeme_pg|change-this-jwt-secret) \
+	      echo "ERROR: $$name usa un placeholder inseguro ($$value)"; exit 1 ;; \
+	  esac; \
+	}; \
+	check_entropy() { \
+	  name="$$1"; min_len="$$2"; \
+	  eval "value=\$${$$name-}"; \
+	  len=$$(printf '%s' "$$value" | wc -c | tr -d ' '); \
+	  if [ "$$len" -lt "$$min_len" ]; then \
+	    echo "ERROR: $$name debe tener longitud minima $$min_len (actual=$$len)"; exit 1; \
+	  fi; \
+	  classes=0; \
+	  printf '%s' "$$value" | grep -q '[a-z]' && classes=$$((classes+1)) || true; \
+	  printf '%s' "$$value" | grep -q '[A-Z]' && classes=$$((classes+1)) || true; \
+	  printf '%s' "$$value" | grep -q '[0-9]' && classes=$$((classes+1)) || true; \
+	  printf '%s' "$$value" | grep -q '[^A-Za-z0-9]' && classes=$$((classes+1)) || true; \
+	  if [ "$$classes" -lt 3 ]; then \
+	    echo "ERROR: $$name necesita al menos 3 clases de caracteres (a-z/A-Z/0-9/simbolos)"; exit 1; \
+	  fi; \
+	}; \
+	check_required MODEL_SWITCHER_TOKEN; \
+	check_required POSTGRES_PASSWORD; \
+	check_required LITELLM_KEY; \
+	check_required ADMIN_JWT_SECRET; \
+	check_required MODEL_SWITCHER_DEFAULT; \
+	if [ -n "$${MODEL_SWITCHER_ADMIN_TOKEN:-}" ]; then \
+	  echo "WARN: MODEL_SWITCHER_ADMIN_TOKEN esta deprecado y se ignora. Usa solo MODEL_SWITCHER_TOKEN"; \
+	fi; \
+	check_entropy MODEL_SWITCHER_TOKEN 24; \
+	check_entropy POSTGRES_PASSWORD 16; \
+	check_entropy LITELLM_KEY 24; \
+	check_entropy ADMIN_JWT_SECRET 32; \
+	echo "[ok] preflight de entorno completado."
+
+prod-image-lock-check:
+	@set -eu; \
+	if [ -f ./versions.lock ]; then set -a; . ./versions.lock; set +a; fi; \
+	for var in POSTGRES_IMAGE LITELLM_IMAGE OPENWEBUI_IMAGE DOCKER_SOCKET_PROXY_IMAGE VLLM_IMAGE_FAST VLLM_IMAGE_QUALITY VLLM_IMAGE_DEEPSEEK VLLM_IMAGE_QWEN_MAX COMFYUI_IMAGE MODEL_SWITCHER_DYNAMIC_VLLM_IMAGE; do \
+	  eval "value=\$${$$var-}"; \
+	  [ -n "$$value" ] || { echo "ERROR: $$var no definido"; exit 1; }; \
+	  case "$$value" in \
+	    *:latest|*:main) \
+	      echo "WARN: $$var usa tag no determinista ($$value). Recomendado fijarlo antes de una fase de hardening."; ;; \
+	  esac; \
+	done; \
+	echo "[ok] image lock check completado."
+
+prod-baseline-snapshot:
+	@set -eu; \
+	TS=$$(date -u +%Y%m%dT%H%M%SZ); \
+	DIR=artifacts/week1-baseline/$$TS; \
+	mkdir -p "$$DIR"; \
+	$(MAKE) prod-ps > "$$DIR/prod-ps.txt"; \
+	$(MAKE) prod-status > "$$DIR/prod-status.json"; \
+	$(MAKE) prod-mode-status > "$$DIR/prod-mode-status.json"; \
+	echo "[ok] baseline guardado en $$DIR"
+
+# --- UX simplificada ---
+up: prod-preflight-env prod-image-lock-check
+	@set -eu; \
+	case "$(MODE)" in \
+	  all) \
+	    $(MAKE) prod-up ;; \
+	  infra) \
+	    $(PROD) --profile webui up -d --remove-orphans $(PROD_BASE_SERVICES) ;; \
+	  models) \
+	    $(PROD) $(PROD_MODEL_PROFILES) up -d --remove-orphans vllm-fast vllm-quality vllm-deepseek vllm-qwen32b comfyui ;; \
+	  *) \
+	    echo "ERROR: MODE invalido: $(MODE). Usa MODE=all|infra|models"; exit 1 ;; \
+	esac
+
+down:
+	@$(MAKE) prod-down
+
+purge:
+	@set -eu; \
+	[ "$(CONFIRM)" = "YES" ] || { echo "ERROR: purge es destructivo. Usa CONFIRM=YES"; exit 1; }; \
+	case "$(SCOPE)" in \
+	  project) \
+	    echo "[purge] scope=project"; \
+	    $(PROD) $(PROD_ALL_PROFILES) down --remove-orphans --volumes --rmi all || true; \
+	    docker builder prune -af || true; \
+	    echo "[ok] reset de proyecto completado." ;; \
+	  host) \
+	    echo "[purge] scope=host (docker completo)"; \
+	    IDS=$$(docker ps -q); \
+	    if [ -n "$$IDS" ]; then docker stop $$IDS; fi; \
+	    ALL_IDS=$$(docker ps -aq); \
+	    if [ -n "$$ALL_IDS" ]; then docker rm -f $$ALL_IDS; fi; \
+	    docker system prune -af --volumes; \
+	    docker builder prune -af || true; \
+	    echo "[ok] reset completo de docker host completado." ;; \
+	  *) \
+	    echo "ERROR: SCOPE invalido: $(SCOPE). Usa SCOPE=project|host"; exit 1 ;; \
+	esac
+
+logs:
+	@set -eu; \
+	if [ "$(TARGET)" = "all" ]; then \
+	  $(PROD) logs -f --tail=$(TAIL); \
+	  exit 0; \
+	fi; \
+	case " $(PROD_COMPOSE_SERVICES) " in \
+	  *" $(TARGET) "*) \
+	    $(PROD) logs -f --tail=$(TAIL) "$(TARGET)" ;; \
+	  *) \
+	    docker logs -f --tail=$(TAIL) "$(TARGET)" ;; \
+	esac
+
+start:
+	@set -eu; \
+	[ "$(TARGET)" != "all" ] || { echo "ERROR: define TARGET=<servicio|contenedor>"; exit 1; }; \
+	case " $(PROD_COMPOSE_SERVICES) " in \
+	  *" $(TARGET) "*) \
+	    $(PROD) $(PROD_ALL_PROFILES) up -d "$(TARGET)" ;; \
+	  *) \
+	    docker start "$(TARGET)" ;; \
+	esac
+
+stop:
+	@set -eu; \
+	[ "$(TARGET)" != "all" ] || { echo "ERROR: define TARGET=<servicio|contenedor>"; exit 1; }; \
+	case " $(PROD_COMPOSE_SERVICES) " in \
+	  *" $(TARGET) "*) \
+	    $(PROD) $(PROD_ALL_PROFILES) stop "$(TARGET)" ;; \
+	  *) \
+	    docker stop "$(TARGET)" ;; \
+	esac
 
 # --- Ciclo de vida ---
-prod-init:
+prod-init: prod-preflight-env prod-image-lock-check
 	@$(MAKE) prod-up
 
-prod-up:
+prod-up: prod-preflight-env prod-image-lock-check
 	@$(PROD) --profile webui up -d --remove-orphans $(PROD_BASE_SERVICES)
-	@$(PROD) --profile webui up -d --remove-orphans admin-panel
 	@$(PROD) $(PROD_MODEL_PROFILES) create vllm-fast vllm-quality vllm-deepseek vllm-qwen32b comfyui
 prod-up-admin:         ; $(PROD) --profile webui up -d --remove-orphans admin-panel
 prod-build-admin:      ; $(PROD) --profile webui build admin-panel && $(PROD) --profile webui up -d --remove-orphans admin-panel
@@ -170,7 +348,7 @@ prod-unregister-model:
 	@curl -s -X DELETE $(SWITCHER_URL)/models/$(MODEL) -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
 prod-status:       ; curl -s $(SWITCHER_URL)/status -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
 prod-mode-status:  ; curl -s $(SWITCHER_URL)/mode -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
-prod-admin-url:    ; @echo "$(HOST_BASE_URL)/admin"
+prod-admin-url:    ; @echo "$(ADMIN_URL)"
 prod-openwebui-url:; @echo "$(OPENWEBUI_URL)"
 prod-comfyui-url:  ; @echo "$(COMFYUI_URL)"
 prod-list-models:  ; curl -s $(SWITCHER_URL)/models -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq
@@ -180,7 +358,7 @@ prod-comfy-off:    ; curl -s $(SWITCHER_URL)/mode/switch -H "Authorization: Bear
 prod-llm-priority: ; curl -s $(SWITCHER_URL)/mode/release -H "Authorization: Bearer $(SWITCHER_TOKEN)" -H "Content-Type: application/json" -d '{}' | jq
 
 # --- Upgrade canary ---
-prod-upgrade-precheck:
+prod-upgrade-precheck: prod-preflight-env prod-image-lock-check
 	@$(MAKE) prod-gpu-preflight
 	@$(MAKE) prod-ps
 	@$(MAKE) prod-status
@@ -308,38 +486,29 @@ prod-proxy-check:
 
 # --- Logs ---
 prod-logs-list:
-	@echo "Servicios de logs:"
-	@echo "  postgres"
-	@echo "  litellm"
-	@echo "  docker-socket-proxy"
-	@echo "  model-switcher"
-	@echo "  vllm-fast"
-	@echo "  vllm-quality"
-	@echo "  vllm-deepseek"
-	@echo "  vllm-qwen32b"
-	@echo "  comfyui"
-	@echo "  open-webui"
-	@echo "  admin-panel"
-	@echo "  (dynamic) usa: make prod-logs-container CONTAINER=vllm-<id>"
+	@echo "Usa make logs TARGET=<all|servicio|contenedor> TAIL=200"
+	@echo "Servicios compose: $(PROD_COMPOSE_SERVICES)"
+	@echo "(dynamic) ejemplo: make logs TARGET=vllm-<id-dinamico> TAIL=200"
 
 prod-logs-all:
-	$(PROD) logs -f --tail=$(TAIL)
+	@$(MAKE) logs TARGET=all TAIL=$(TAIL)
 
 prod-logs:
 ifeq ($(strip $(SERVICE)),)
-	$(PROD) logs -f --tail=$(TAIL)
+	@$(MAKE) logs TARGET=all TAIL=$(TAIL)
 else
-	$(PROD) logs -f --tail=$(TAIL) $(SERVICE)
+	@$(MAKE) logs TARGET=$(SERVICE) TAIL=$(TAIL)
 endif
 
 prod-logs-container:
 	@test -n "$(CONTAINER)" || { echo "ERROR: define CONTAINER=<docker-container-name>"; exit 1; }
-	@docker logs -f --tail=$(TAIL) $(CONTAINER)
+	@$(MAKE) logs TARGET=$(CONTAINER) TAIL=$(TAIL)
 
 prod-logs-%:
-	$(PROD) logs -f --tail=$(TAIL) $*
+	@$(MAKE) logs TARGET=$* TAIL=$(TAIL)
 
-.PHONY: help \
+.PHONY: help up down purge logs start stop \
+        prod-preflight-env prod-image-lock-check prod-baseline-snapshot \
         prod-init prod-up prod-up-admin prod-build-admin prod-build-switcher prod-bootstrap-models prod-down prod-ps prod-pull prod-restart \
         prod-switch prod-switch-async prod-register-model prod-unregister-model prod-status prod-mode-status prod-admin-url prod-openwebui-url prod-comfyui-url prod-list-models prod-stop-models prod-comfy-on prod-comfy-off prod-comfy-on-safe prod-llm-priority prod-gpu-preflight prod-test prod-test-auto prod-test-auto-ext prod-ports-check prod-proxy-check \
         prod-upgrade-precheck prod-upgrade-canary prod-upgrade-verify prod-upgrade-promote prod-upgrade-rollback \
