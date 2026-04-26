@@ -14,7 +14,6 @@ Makefile.ops                # Comandos operativos (VPN/SSH)
 versions.lock               # Lock de versiones de imagen consumido por Makefile
 control/                    # API HTTP para cambiar modelos y modo llm/comfy
 control/Dockerfile          # Imagen del model switcher
-ops/nginx/                  # Config edge proxy Nginx (80/443)
 scripts/prod_test_auto.sh   # Batería automática de validación en producción
 compatibility-matrix.md     # Matriz de compatibilidad de modelos/runtime
 ```
@@ -50,17 +49,11 @@ make stop TARGET=admin-panel
 
 ## Versionado de imágenes
 
-En producción, `LITELLM_IMAGE` y `OPENWEBUI_IMAGE` deben ir fijadas por digest (`@sha256`).
+En esta release de compatibilidad, `versions.lock` mantiene las imágenes tal como se usan hoy en producción.
+`make prod-image-lock-check` valida que las variables estén definidas y avisa si hay tags no deterministas
+(`latest`/`main`) para dejar el pinning por digest a una fase posterior y probada.
 
-Flujo recomendado para refrescar digests en `versions.lock`:
-
-```bash
-docker buildx imagetools inspect litellm/litellm:v1.81.15
-docker buildx imagetools inspect ghcr.io/open-webui/open-webui:main
-# copiar el campo "Digest:" a versions.lock como imagen@sha256:...
-```
-
-Después valida el lock antes de desplegar:
+Antes de desplegar:
 
 ```bash
 make prod-image-lock-check
@@ -316,20 +309,12 @@ make prod-register-model
 - modo activo (`llm|comfy`) y lease de ComfyUI (`expires_at`, `remaining_seconds`, `expired`)
 - estado de `litellm`, `comfyui`, `running_models` y switch en curso
 
-## Publicación por edge proxy (80/443 only)
+## Publicación directa por puertos (sin gateway Nginx)
 
-El stack productivo expone solo:
-- `https://<host>/` -> OpenWebUI
-- `https://<host>/admin` -> panel admin
-- `https://<host>/comfy/` -> ComfyUI (protegido por sesión admin)
-
-Rutas internas del panel admin (en edge):
-- `/admin-api/*` -> proxy a API backend del admin-panel
-- `/admin-auth/*` -> login/sesión y chequeo de auth para `comfy`
-
-Puertos backend **no expuestos públicamente**: `3000`, `4000`, `8001-8004`, `8188`.
-
-`model-switcher` queda en loopback (`127.0.0.1:9000`) para runbook operativo.
+El stack productivo publica directamente en host:
+- `http://<host>:80/admin` -> panel admin
+- `http://<host>:3000` -> OpenWebUI
+- `http://<host>:8188` -> ComfyUI (cuando está activo)
 
 Pasos:
 
@@ -341,14 +326,16 @@ make prod-init
 Validaciones rápidas:
 
 ```bash
-# valida puertos abiertos/cerrados en host
-make prod-ports-audit
+# 3000 debe aparecer; 8188 aparece cuando ComfyUI está activo
+make prod-ports-check
 
-# valida rutas del edge proxy
+# URLs directas
 make prod-proxy-check
 ```
 
-La UI `/admin` autentica con credenciales admin de Open WebUI (cookie `admin_jwt`) y usa:
+Nota: `:8188` puede no responder cuando ComfyUI está apagado (modo `llm`), y se considera normal.
+
+La UI `/admin` pide token `MODEL_SWITCHER_TOKEN` y usa:
 - `POST /mode/switch` para `llm|comfy`
 - `POST /mode/release` para preemption inmediata a LLM
 - `GET /status` + `GET /models` para panel unificado `Estado`, `Modelos IA` y `Data`
@@ -403,9 +390,12 @@ MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-llm-priority
 MODEL_SWITCHER_TOKEN=tu_token_seguro MODEL=deepseek make prod-switch
 ```
 
-4. Verifica salud final del plano LLM:
+4. Verifica respuesta con el id real de LiteLLM (`deepseek-r1`):
 ```bash
-MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-test
+curl -sf http://127.0.0.1:4000/v1/chat/completions \
+  -H "Authorization: Bearer <LITELLM_KEY>" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"deepseek-r1","messages":[{"role":"user","content":"ping"}],"temperature":0}' | jq
 ```
 
 ## Test único de salud
@@ -415,8 +405,8 @@ make prod-test
 ```
 
 `prod-test` autodetecta el modo activo:
-- En `llm`, valida `GET /healthz/ready` del `model-switcher`.
-- En `comfy`, valida `comfyui.status=running` y que no esté `unhealthy` vía `GET /status`.
+- En `llm`, ejecuta `POST /v1/chat/completions` contra LiteLLM con `active_litellm_model` (o fallback por mapeo `/models`).
+- En `comfy`, ejecuta `GET http://127.0.0.1:8188/system_stats` directamente contra ComfyUI.
 
 En ambos casos imprime la llamada que ha usado para verificar.
 

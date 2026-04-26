@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import bcrypt
 import jwt
 import requests
-from fastapi import FastAPI, HTTPException, Depends, Response, Request
+from fastapi import FastAPI, HTTPException, Depends, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
@@ -22,13 +22,12 @@ from pydantic import BaseModel
 # Config
 # ---------------------------------------------------------------------------
 WEBUI_DB_PATH = os.environ.get("WEBUI_DB_PATH", "/webui-data/webui.db")
-JWT_SECRET = os.environ.get("ADMIN_JWT_SECRET", "")
+JWT_SECRET = os.environ.get("ADMIN_JWT_SECRET", "change-this-secret")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = 8
-COOKIE_SECURE = os.environ.get("ADMIN_COOKIE_SECURE", "1").strip().lower() in {"1", "true", "yes", "on"}
 
 SWITCHER_URL = os.environ.get("MODEL_SWITCHER_URL", "http://model-switcher:9000")
-SWITCHER_TOKEN = os.environ.get("MODEL_SWITCHER_TOKEN", "")
+SWITCHER_TOKEN = os.environ.get("MODEL_SWITCHER_TOKEN", "change_me")
 DOCKER_PROXY_URL = os.environ.get("DOCKER_PROXY_URL", "http://docker-socket-proxy:2375")
 COMFYUI_INTERNAL_URL = os.environ.get("COMFYUI_INTERNAL_URL", "http://comfyui:8188")
 LITELLM_URL = os.environ.get("LITELLM_URL", "http://litellm:4000")
@@ -54,11 +53,6 @@ MODEL_INFO = {
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("admin-panel")
-
-if not JWT_SECRET:
-    raise RuntimeError("ADMIN_JWT_SECRET is required")
-if not SWITCHER_TOKEN:
-    raise RuntimeError("MODEL_SWITCHER_TOKEN is required")
 
 app = FastAPI(title="Admin Panel", docs_url=None, redoc_url=None)
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -127,25 +121,10 @@ def decode_jwt(token: str) -> Optional[dict]:
         return None
 
 
-def token_from_request(request: Request, credentials: Optional[HTTPAuthorizationCredentials]) -> Optional[str]:
-    if credentials is not None and credentials.scheme.lower() == "bearer":
-        token = credentials.credentials.strip()
-        if token:
-            return token
-    cookie_token = request.cookies.get("admin_jwt", "").strip()
-    if cookie_token:
-        return cookie_token
-    return None
-
-
-def get_current_user(
-    request: Request,
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
-) -> dict:
-    token = token_from_request(request, credentials)
-    if not token:
+def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme)) -> dict:
+    if credentials is None:
         raise HTTPException(status_code=401, detail="No token provided")
-    payload = decode_jwt(token)
+    payload = decode_jwt(credentials.credentials)
     if payload is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     return payload
@@ -532,9 +511,7 @@ def login(req: LoginRequest, response: Response):
         key="admin_jwt",
         value=token,
         httponly=True,
-        secure=COOKIE_SECURE,
         samesite="lax",
-        path="/",
         max_age=JWT_EXPIRE_HOURS * 3600,
     )
     return {"token": token, "name": user["name"], "email": user["email"]}
@@ -543,12 +520,6 @@ def login(req: LoginRequest, response: Response):
 @app.get("/auth/me")
 def me(user: dict = Depends(get_current_user)):
     return {"name": user["name"], "email": user["sub"], "role": user["role"]}
-
-
-@app.get("/auth/check", status_code=204)
-def auth_check(user: dict = Depends(get_current_user)):
-    _ = user
-    return Response(status_code=204)
 
 
 # ---------------------------------------------------------------------------
@@ -1430,8 +1401,6 @@ function setLanguage(nextLang) {
 }
 
 let TOKEN = localStorage.getItem('admin_jwt') || '';
-const AUTH_BASE = '/admin-auth';
-const API_BASE = '/admin-api';
 let statusData = null;
 let aiModelsData = null;
 let dataOverview = null;
@@ -1459,7 +1428,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
 async function tryAutoLogin() {
   try {
-    const me = await apiFetch(AUTH_BASE + '/me');
+    const me = await apiFetch('/auth/me');
     showApp(me.name);
   } catch {
     TOKEN = '';
@@ -1477,7 +1446,7 @@ async function doLogin() {
   button.disabled = true;
   button.textContent = t('login_loading');
   try {
-    const r = await fetch(AUTH_BASE + '/login', {
+    const r = await fetch('/auth/login', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({email, password}),
@@ -1530,8 +1499,7 @@ function showSection(id, navEl) {
 }
 
 async function apiFetch(path, opts = {}) {
-  const headers = {...(opts.headers || {})};
-  if (TOKEN) headers['Authorization'] = 'Bearer ' + TOKEN;
+  const headers = {'Authorization': 'Bearer ' + TOKEN, ...(opts.headers || {})};
   const r = await fetch(path, {...opts, headers});
   if (r.status === 401) {
     doLogout();
@@ -1550,7 +1518,7 @@ async function refreshAll() {
 
 async function refreshStatus() {
   try {
-    const data = await apiFetch(API_BASE + '/status/full');
+    const data = await apiFetch('/api/status/full');
     statusData = data;
     if (!data.switch_in_progress) pendingModeTarget = null;
     renderStatus(data);
@@ -1566,7 +1534,7 @@ async function refreshStatus() {
 
 async function refreshModels() {
   try {
-    aiModelsData = await apiFetch(API_BASE + '/ai/models');
+    aiModelsData = await apiFetch('/api/ai/models');
     renderModelGrid();
     syncReturnModelSelect();
     ensureLogContainerOptions();
@@ -1578,8 +1546,8 @@ async function refreshModels() {
 async function refreshData() {
   try {
     const [overview, series] = await Promise.all([
-      apiFetch(API_BASE + '/data/overview'),
-      apiFetch(API_BASE + '/data/timeseries?days=14'),
+      apiFetch('/api/data/overview'),
+      apiFetch('/api/data/timeseries?days=14'),
     ]);
     dataOverview = overview;
     dataSeries = series;
@@ -1669,8 +1637,9 @@ function renderModelGrid() {
   const models = aiModelsData?.models || [];
   const activeMode = aiModelsData?.active_mode || statusData?.mode?.active || statusData?.active_mode;
   const switchInProgress = Boolean(aiModelsData?.switch_in_progress || statusData?.switch_in_progress);
-  const origin = window.location.origin;
-  const webuiUrl = `${origin}/`;
+  const host = window.location.hostname || '127.0.0.1';
+  const protocol = window.location.protocol || 'http:';
+  const webuiUrl = `${protocol}//${host}:3000`;
 
   models.forEach(model => {
     const isActive = Boolean(model.is_active);
@@ -1720,7 +1689,7 @@ function renderModelGrid() {
   const comfyRunning = statusData?.comfyui?.status === 'running' || aiModelsData?.comfyui?.status === 'running';
   const lease = statusData?.mode?.lease || aiModelsData?.mode?.lease;
   const comfyTransition = switchInProgress && (pendingModeTarget === 'comfy' || mode === 'comfy');
-  const comfyUrl = `${origin}/comfy/`;
+  const comfyUrl = `${protocol}//${host}:8188`;
   const ttlOptions = ['15', '30', '45', '60', '90']
     .map(v => `<option value="${v}" ${previousTtl === v ? 'selected' : ''}>${v} min</option>`)
     .join('');
@@ -1881,7 +1850,7 @@ async function fetchLogs() {
   const container = select.value || defaultLogContainer();
   box.textContent = t('logs_loading');
   try {
-    const data = await apiFetch(API_BASE + '/logs?container=' + encodeURIComponent(container) + '&tail=300');
+    const data = await apiFetch('/api/logs?container=' + encodeURIComponent(container) + '&tail=300');
     renderLogs(data.logs || t('logs_empty'));
     box.scrollTop = box.scrollHeight;
   } catch (e) {
@@ -1917,7 +1886,7 @@ async function switchToModel(model) {
   pendingModeTarget = 'llm';
   showToast('info', t('toast_switch_start', {model}));
   try {
-    await apiFetch(API_BASE + '/mode/switch', {
+    await apiFetch('/api/mode/switch', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({mode: 'llm', model, wait_for_ready: false}),
@@ -1937,7 +1906,7 @@ async function activateComfy() {
   pendingModeTarget = 'comfy';
   showToast('info', t('toast_activate_comfy', {ttl}));
   try {
-    await apiFetch(API_BASE + '/mode/switch', {
+    await apiFetch('/api/mode/switch', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({mode: 'comfy', ttl_minutes: ttl, wait_for_ready: false}),
@@ -1957,7 +1926,7 @@ async function deactivateComfy() {
   pendingModeTarget = 'llm';
   showToast('info', t('toast_deactivate_comfy', {model}));
   try {
-    await apiFetch(API_BASE + '/mode/switch', {
+    await apiFetch('/api/mode/switch', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({mode: 'llm', model, wait_for_ready: false}),
@@ -1974,7 +1943,7 @@ async function preemptComfy() {
   pendingModeTarget = 'llm';
   showToast('info', t('toast_preempt'));
   try {
-    await apiFetch(API_BASE + '/mode/release', {
+    await apiFetch('/api/mode/release', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
     });

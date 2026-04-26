@@ -1,12 +1,10 @@
 # Image lock consumed by Makefile (`-include versions.lock`).
-# Keep this file committed and versioned.
-# NOTE: if registry access is available, prefer immutable @sha256 digests.
+# Keep this file committed and versioned. Use explicit tags when possible.
 
 POSTGRES_IMAGE=postgres:16-alpine
-LITELLM_IMAGE=litellm/litellm@sha256:303c31af87e7915e7b34d6c4d55a6ac753ef947a5deaa899e9ccfd3d1d58f7c2
-OPENWEBUI_IMAGE=ghcr.io/open-webui/open-webui@sha256:bb3f0281554bf05a9d505ffb5a5f067ab53e13ac772eb4ea3077a92ddc64600e
+LITELLM_IMAGE=litellm/litellm:latest
+OPENWEBUI_IMAGE=ghcr.io/open-webui/open-webui:main
 DOCKER_SOCKET_PROXY_IMAGE=tecnativa/docker-socket-proxy:0.1.1
-EDGE_PROXY_IMAGE=nginx:1.27.4-alpine
 
 VLLM_IMAGE_FAST=vllm/vllm-openai:v0.5.4
 VLLM_IMAGE_QUALITY=vllm/vllm-openai:v0.5.4

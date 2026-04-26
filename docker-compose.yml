@@ -22,7 +22,7 @@ services:
     restart: unless-stopped
 
   litellm:
-    image: ${LITELLM_IMAGE:-litellm/litellm@sha256:303c31af87e7915e7b34d6c4d55a6ac753ef947a5deaa899e9ccfd3d1d58f7c2}
+    image: ${LITELLM_IMAGE:-litellm/litellm:main-stable}
     container_name: litellm
     ports:
       - "4000:4000"
@@ -35,7 +35,7 @@ services:
     restart: unless-stopped
 
   open-webui:
-    image: ${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui@sha256:bb3f0281554bf05a9d505ffb5a5f067ab53e13ac772eb4ea3077a92ddc64600e}
+    image: ${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:main}
     container_name: open-webui
     ports:
       - "3000:8080"

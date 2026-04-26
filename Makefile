@@ -3,8 +3,9 @@
 # ============================================================
 
 SWITCHER_TOKEN ?= $(MODEL_SWITCHER_TOKEN)
+SWITCHER_TOKEN := $(or $(SWITCHER_TOKEN),change_me)
 SWITCHER_URL ?= http://127.0.0.1:9000
-API_KEY ?= $(LITELLM_KEY)
+API_KEY ?= $(or $(LITELLM_KEY),cambiaLAclave)
 MODEL ?= qwen-fast
 HF_URL ?=
 MODEL_ID ?=
@@ -30,20 +31,18 @@ SCOPE ?= project
 ROLLBACK_REF ?=
 ARTIFACT_DIR ?=
 EXTENSIVE ?= 0
-HOST_BASE_URL ?= https://127.0.0.1
-OPENWEBUI_URL ?= $(HOST_BASE_URL)/
-COMFYUI_URL ?= $(HOST_BASE_URL)/comfy/
+HOST_BASE_URL ?= http://127.0.0.1
+OPENWEBUI_URL ?= http://127.0.0.1:3000
+COMFYUI_URL ?= http://127.0.0.1:8188
 ADMIN_URL ?= $(HOST_BASE_URL)/admin
-ADMIN_API_URL ?= $(HOST_BASE_URL)/admin-api
 
 -include Makefile.ops
 -include versions.lock
 
 POSTGRES_IMAGE ?= postgres:16-alpine
-LITELLM_IMAGE ?= litellm/litellm@sha256:303c31af87e7915e7b34d6c4d55a6ac753ef947a5deaa899e9ccfd3d1d58f7c2
-OPENWEBUI_IMAGE ?= ghcr.io/open-webui/open-webui@sha256:bb3f0281554bf05a9d505ffb5a5f067ab53e13ac772eb4ea3077a92ddc64600e
+LITELLM_IMAGE ?= litellm/litellm:main-stable
+OPENWEBUI_IMAGE ?= ghcr.io/open-webui/open-webui:main
 DOCKER_SOCKET_PROXY_IMAGE ?= tecnativa/docker-socket-proxy:0.1.1
-EDGE_PROXY_IMAGE ?= nginx:1.27.4-alpine
 VLLM_IMAGE_FAST ?= vllm/vllm-openai:v0.5.4
 VLLM_IMAGE_QUALITY ?= vllm/vllm-openai:v0.5.4
 VLLM_IMAGE_DEEPSEEK ?= vllm/vllm-openai:v0.6.6.post1
@@ -61,7 +60,6 @@ PROD_ENV = \
 	LITELLM_IMAGE=$(LITELLM_IMAGE) \
 	OPENWEBUI_IMAGE=$(OPENWEBUI_IMAGE) \
 	DOCKER_SOCKET_PROXY_IMAGE=$(DOCKER_SOCKET_PROXY_IMAGE) \
-	EDGE_PROXY_IMAGE=$(EDGE_PROXY_IMAGE) \
 	VLLM_IMAGE_FAST=$(VLLM_IMAGE_FAST) \
 	VLLM_IMAGE_QUALITY=$(VLLM_IMAGE_QUALITY) \
 	VLLM_IMAGE_DEEPSEEK=$(VLLM_IMAGE_DEEPSEEK) \
@@ -72,7 +70,7 @@ PROD_ENV = \
 	MODEL_SWITCHER_DYNAMIC_ALLOW_TRUST_REMOTE_CODE=$(MODEL_SWITCHER_DYNAMIC_ALLOW_TRUST_REMOTE_CODE) \
 	MODEL_SWITCHER_TRUSTED_REPOS=$(MODEL_SWITCHER_TRUSTED_REPOS)
 PROD = cd $(PROD_DIR) && $(PROD_ENV) $(PROD_COMPOSE)
-PROD_BASE_SERVICES = postgres litellm docker-socket-proxy model-switcher open-webui admin-panel edge-proxy
+PROD_BASE_SERVICES = postgres litellm docker-socket-proxy model-switcher open-webui admin-panel
 PROD_MODEL_PROFILES = --profile qwen-fast --profile qwen-quality --profile deepseek --profile qwen-max --profile comfy
 PROD_ALL_PROFILES = --profile webui $(PROD_MODEL_PROFILES)
 PROD_COMPOSE_SERVICES = $(PROD_BASE_SERVICES) vllm-fast vllm-quality vllm-deepseek vllm-qwen32b comfyui
@@ -97,7 +95,7 @@ help:
 	@echo ""
 	@echo "Comandos existentes (compatibilidad):"
 	@echo "  make prod-preflight-env         # valida secretos requeridos y placeholders inseguros"
-	@echo "  make prod-image-lock-check      # bloquea tags latest/main en imagenes de prod"
+	@echo "  make prod-image-lock-check      # valida imagenes configuradas y avisa sobre tags no deterministas"
 	@echo "  make prod-baseline-snapshot     # guarda snapshot operativo en artifacts/week1-baseline"
 	@echo "  make prod-init                  # levanta servicios base y crea contenedores de modelos/comfy"
 	@echo "  make prod-up                    # levanta stack base y asegura contenedores de modelos/comfy"
@@ -119,11 +117,11 @@ help:
 	@echo "  make prod-status | make prod-mode-status"
 	@echo "  make prod-test                 # prueba unica; decide llamada segun modo activo"
 	@echo "  make prod-test-auto [EXTENSIVE=1]    # bateria automatica PASS/FAIL"
-	@echo "  make prod-ports-audit          # valida exposicion publica: solo 80/443 y 9000 loopback"
-	@echo "  make prod-proxy-check          # chequea edge proxy: /, /admin, /admin-api, /comfy/"
+	@echo "  make prod-ports-check          # valida puertos directos: 3000 (OpenWebUI) y 8188 (ComfyUI)"
+	@echo "  make prod-proxy-check          # chequeo HTTP directo de OpenWebUI/ComfyUI (sin gateway)"
 	@echo "  make prod-admin-url            # URL del panel admin"
-	@echo "  make prod-openwebui-url        # URL publica de OpenWebUI (edge)"
-	@echo "  make prod-comfyui-url          # URL publica de ComfyUI (edge)"
+	@echo "  make prod-openwebui-url        # URL directa de OpenWebUI"
+	@echo "  make prod-comfyui-url          # URL directa de ComfyUI"
 	@echo ""
 	@echo "Upgrade:"
 	@echo "  make prod-upgrade-precheck"
@@ -200,23 +198,12 @@ prod-preflight-env:
 prod-image-lock-check:
 	@set -eu; \
 	if [ -f ./versions.lock ]; then set -a; . ./versions.lock; set +a; fi; \
-	for var in POSTGRES_IMAGE LITELLM_IMAGE OPENWEBUI_IMAGE DOCKER_SOCKET_PROXY_IMAGE EDGE_PROXY_IMAGE VLLM_IMAGE_FAST VLLM_IMAGE_QUALITY VLLM_IMAGE_DEEPSEEK VLLM_IMAGE_QWEN_MAX COMFYUI_IMAGE MODEL_SWITCHER_DYNAMIC_VLLM_IMAGE; do \
+	for var in POSTGRES_IMAGE LITELLM_IMAGE OPENWEBUI_IMAGE DOCKER_SOCKET_PROXY_IMAGE VLLM_IMAGE_FAST VLLM_IMAGE_QUALITY VLLM_IMAGE_DEEPSEEK VLLM_IMAGE_QWEN_MAX COMFYUI_IMAGE MODEL_SWITCHER_DYNAMIC_VLLM_IMAGE; do \
 	  eval "value=\$${$$var-}"; \
-	  [ -n "$$value" ] || continue; \
+	  [ -n "$$value" ] || { echo "ERROR: $$var no definido"; exit 1; }; \
 	  case "$$value" in \
 	    *:latest|*:main) \
-	      echo "ERROR: $$var usa tag no determinista ($$value)"; \
-	      exit 1 ;; \
-	  esac; \
-	done; \
-	for var in LITELLM_IMAGE OPENWEBUI_IMAGE; do \
-	  eval "value=\$${$$var-}"; \
-	  [ -n "$$value" ] || continue; \
-	  case "$$value" in \
-	    *@sha256:*) ;; \
-	    *) \
-	      echo "ERROR: $$var debe ir pinneada por digest @sha256 ($$value)"; \
-	      exit 1 ;; \
+	      echo "WARN: $$var usa tag no determinista ($$value). Recomendado fijarlo antes de una fase de hardening."; ;; \
 	  esac; \
 	done; \
 	echo "[ok] image lock check completado."
@@ -433,18 +420,30 @@ prod-comfy-on-safe:
 prod-test:
 	@MODE=$$(curl -sf $(SWITCHER_URL)/mode -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq -r '.mode.active'); \
 	if [ "$$MODE" = "llm" ]; then \
-	  echo "Llamada usada: GET $(SWITCHER_URL)/healthz/ready"; \
-	  curl -sf "$(SWITCHER_URL)/healthz/ready" -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq -e '.status == "ready"' >/dev/null; \
-	  echo "OK: modo llm listo"; \
-	elif [ "$$MODE" = "comfy" ]; then \
-	  STATUS_JSON=$$(curl -sf "$(SWITCHER_URL)/status" -H "Authorization: Bearer $(SWITCHER_TOKEN)"); \
-	  COMFY_STATUS=$$(printf '%s' "$$STATUS_JSON" | jq -r '.comfyui.status // empty'); \
-	  COMFY_HEALTH=$$(printf '%s' "$$STATUS_JSON" | jq -r '.comfyui.health // "none"'); \
-	  [ "$$COMFY_STATUS" = "running" ] || { echo "ERROR: comfyui no esta running (status=$$COMFY_STATUS)"; exit 1; }; \
-	  if [ "$$COMFY_HEALTH" = "unhealthy" ]; then \
-	    echo "ERROR: comfyui esta unhealthy"; exit 1; \
+	  STATUS_JSON=$$(curl -sf $(SWITCHER_URL)/status -H "Authorization: Bearer $(SWITCHER_TOKEN)"); \
+	  MODEL_ACTIVE=$$(printf '%s' "$$STATUS_JSON" | jq -r '.active_model'); \
+	  if [ -z "$$MODEL_ACTIVE" ] || [ "$$MODEL_ACTIVE" = "null" ]; then \
+	    echo "ERROR: no hay active_model en modo llm"; exit 1; \
 	  fi; \
-	  echo "OK: modo comfy activo (health=$$COMFY_HEALTH)"; \
+	  MODEL_LITELLM=$$(printf '%s' "$$STATUS_JSON" | jq -r '.active_litellm_model // empty'); \
+	  if [ -z "$$MODEL_LITELLM" ]; then \
+	    MODEL_LITELLM=$$(curl -sf $(SWITCHER_URL)/models -H "Authorization: Bearer $(SWITCHER_TOKEN)" | jq -r --arg mid "$$MODEL_ACTIVE" '[.models[]? | select(.id == $$mid) | .litellm_model][0] // empty'); \
+	  fi; \
+	  if [ -z "$$MODEL_LITELLM" ] || [ "$$MODEL_LITELLM" = "null" ]; then \
+	    MODEL_LITELLM="$$MODEL_ACTIVE"; \
+	  fi; \
+	  echo "Llamada usada: POST http://127.0.0.1:4000/v1/chat/completions (model=$$MODEL_LITELLM)"; \
+	  curl -sf http://127.0.0.1:4000/v1/chat/completions \
+	    -H "Authorization: Bearer $(API_KEY)" \
+	    -H "Content-Type: application/json" \
+	    -d "{\"model\":\"$$MODEL_LITELLM\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"temperature\":0}" \
+	    | jq -e '.choices[0].message.content' >/dev/null; \
+	  echo "OK: LiteLLM/vLLM responde con $$MODEL_LITELLM"; \
+	elif [ "$$MODE" = "comfy" ]; then \
+	  COMFY_STATS_URL="$(COMFYUI_URL)/system_stats"; \
+	  echo "Llamada usada: GET $$COMFY_STATS_URL"; \
+	  curl -sf "$$COMFY_STATS_URL" | jq -e '.' >/dev/null; \
+	  echo "OK: ComfyUI responde"; \
 	else \
 	  echo "ERROR: modo desconocido '$$MODE'"; exit 1; \
 	fi
@@ -462,51 +461,27 @@ prod-test-auto-ext:
 	@$(MAKE) prod-test-auto EXTENSIVE=1
 
 prod-ports-check:
-	@$(MAKE) prod-ports-audit
-
-prod-ports-audit:
-	@set -eu; \
-	command -v ss >/dev/null 2>&1 || { echo "ERROR: 'ss' no disponible"; exit 1; }; \
-	for port in 80 443; do \
-	  if ! ss -ltnH "( sport = :$$port )" | grep -q .; then \
-	    echo "ERROR: puerto requerido no publicado: $$port"; exit 1; \
-	  fi; \
-	done; \
-	for blocked in 3000 4000 8001 8002 8003 8004 8188; do \
-	  if ss -ltnH "( sport = :$$blocked )" | grep -q .; then \
-	    echo "ERROR: puerto no permitido publicado: $$blocked"; exit 1; \
-	  fi; \
-	done; \
-	if ss -ltnH "( sport = :9000 )" | grep -q .; then \
-	  BAD=$$(ss -ltnH "( sport = :9000 )" | awk '{print $$4}' | grep -Ev '^(127\.0\.0\.1|::1|\[::1\]):9000$$' || true); \
-	  if [ -n "$$BAD" ]; then \
-	    echo "ERROR: puerto 9000 debe ser loopback-only; listeners invalidos: $$BAD"; \
-	    exit 1; \
-	  fi; \
-	fi; \
-	echo "OK: audit de puertos completado (80/443 publicos, backends cerrados, 9000 loopback)."
+	@command -v ss >/dev/null 2>&1 || { echo "ERROR: 'ss' no disponible"; exit 1; }
+	@PORTS=$$(ss -ltn | awk 'NR>1 {print $$4}'); \
+	echo "$$PORTS" | grep -Eq '(:3000)$$' || { echo "ERROR: OpenWebUI no esta publicado en :3000"; exit 1; }; \
+	if echo "$$PORTS" | grep -Eq '(:8188)$$'; then \
+	  echo "OK: puertos directos activos en host (:3000 y :8188)"; \
+	else \
+	  echo "OK: :3000 activo; :8188 no esta escuchando (normal si ComfyUI esta apagado)"; \
+	fi
 
 prod-proxy-check:
 	@set -e; \
-	CODE_ROOT=$$(curl -k -s -o /dev/null -w '%{http_code}' "$(HOST_BASE_URL)/"); \
-	case "$$CODE_ROOT" in \
-	  200|301|302|307|308) echo "OK: $(HOST_BASE_URL)/ -> $$CODE_ROOT" ;; \
-	  *) echo "ERROR: $(HOST_BASE_URL)/ -> $$CODE_ROOT"; exit 1 ;; \
+	CODE_WEBUI=$$(curl -k -s -o /dev/null -w '%{http_code}' "$(OPENWEBUI_URL)"); \
+	case "$$CODE_WEBUI" in \
+	  200|301|302|307|308) echo "OK: $(OPENWEBUI_URL) -> $$CODE_WEBUI" ;; \
+	  *) echo "ERROR: $(OPENWEBUI_URL) -> $$CODE_WEBUI"; exit 1 ;; \
 	esac; \
-	CODE_ADMIN=$$(curl -k -s -o /dev/null -w '%{http_code}' "$(ADMIN_URL)"); \
-	case "$$CODE_ADMIN" in \
-	  200|301|302|307|308) echo "OK: $(ADMIN_URL) -> $$CODE_ADMIN" ;; \
-	  *) echo "ERROR: $(ADMIN_URL) -> $$CODE_ADMIN"; exit 1 ;; \
-	esac; \
-	CODE_ADMIN_API=$$(curl -k -s -o /dev/null -w '%{http_code}' "$(ADMIN_API_URL)/status" || true); \
-	case "$$CODE_ADMIN_API" in \
-	  401|403) echo "OK: $(ADMIN_API_URL)/status protegido -> $$CODE_ADMIN_API" ;; \
-	  *) echo "ERROR: $(ADMIN_API_URL)/status deberia requerir auth (actual=$$CODE_ADMIN_API)"; exit 1 ;; \
-	esac; \
-	CODE_COMFY=$$(curl -k -s -o /dev/null -w '%{http_code}' "$(COMFYUI_URL)" || true); \
+	CODE_COMFY=$$(curl -k -s -o /dev/null -w '%{http_code}' "$(COMFYUI_URL)/system_stats" || true); \
 	case "$$CODE_COMFY" in \
-	  401|403) echo "OK: $(COMFYUI_URL) protegido -> $$CODE_COMFY" ;; \
-	  *) echo "ERROR: $(COMFYUI_URL) deberia estar protegido (actual=$$CODE_COMFY)"; exit 1 ;; \
+	  200) echo "OK: $(COMFYUI_URL)/system_stats -> $$CODE_COMFY" ;; \
+	  000) echo "OK: $(COMFYUI_URL)/system_stats no disponible (ComfyUI apagado)" ;; \
+	  *) echo "ERROR: $(COMFYUI_URL)/system_stats -> $$CODE_COMFY"; exit 1 ;; \
 	esac
 
 # --- Logs ---
@@ -535,6 +510,6 @@ prod-logs-%:
 .PHONY: help up down purge logs start stop \
         prod-preflight-env prod-image-lock-check prod-baseline-snapshot \
         prod-init prod-up prod-up-admin prod-build-admin prod-build-switcher prod-bootstrap-models prod-down prod-ps prod-pull prod-restart \
-        prod-switch prod-switch-async prod-register-model prod-unregister-model prod-status prod-mode-status prod-admin-url prod-openwebui-url prod-comfyui-url prod-list-models prod-stop-models prod-comfy-on prod-comfy-off prod-comfy-on-safe prod-llm-priority prod-gpu-preflight prod-test prod-test-auto prod-test-auto-ext prod-ports-check prod-ports-audit prod-proxy-check \
+        prod-switch prod-switch-async prod-register-model prod-unregister-model prod-status prod-mode-status prod-admin-url prod-openwebui-url prod-comfyui-url prod-list-models prod-stop-models prod-comfy-on prod-comfy-off prod-comfy-on-safe prod-llm-priority prod-gpu-preflight prod-test prod-test-auto prod-test-auto-ext prod-ports-check prod-proxy-check \
         prod-upgrade-precheck prod-upgrade-canary prod-upgrade-verify prod-upgrade-promote prod-upgrade-rollback \
         prod-logs-list prod-logs-all prod-logs prod-logs-container prod-logs-%

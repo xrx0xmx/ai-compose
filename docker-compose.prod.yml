@@ -4,15 +4,10 @@
 # ============================================================
 services:
   postgres:
-    environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     volumes:
       - /opt/ai/postgres:/var/lib/postgresql/data
 
   litellm:
-    environment:
-      DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/litellm
-    ports: !reset []
     depends_on:
       postgres:
         condition: service_healthy
@@ -43,6 +38,7 @@ services:
     container_name: model-switcher
     environment:
       - PYTHONDONTWRITEBYTECODE=1
+      - MODEL_SWITCHER_TOKEN=${MODEL_SWITCHER_TOKEN:-change_me}
       - MODEL_SWITCHER_DEFAULT=${MODEL_SWITCHER_DEFAULT:-qwen-fast}
       - MODEL_SWITCHER_BIND=0.0.0.0
       - MODEL_SWITCHER_PORT=9000
@@ -51,8 +47,7 @@ services:
       - MODEL_SWITCHER_POLL_INTERVAL_SECONDS=${MODEL_SWITCHER_POLL_INTERVAL_SECONDS:-2}
       - MODEL_SWITCHER_LITELLM_VERIFY_TIMEOUT_SECONDS=${MODEL_SWITCHER_LITELLM_VERIFY_TIMEOUT_SECONDS:-90}
       - MODEL_SWITCHER_LITELLM_MODELS_URL=http://litellm:4000/v1/models
-      - MODEL_SWITCHER_TOKEN=${MODEL_SWITCHER_TOKEN:?MODEL_SWITCHER_TOKEN is required}
-      - MODEL_SWITCHER_LITELLM_KEY=${LITELLM_KEY:?LITELLM_KEY is required}
+      - MODEL_SWITCHER_LITELLM_KEY=${LITELLM_KEY:-cambiaLAclave}
       - DOCKER_PROXY_URL=http://docker-socket-proxy:2375
       - MODEL_CONFIG_DIR=/config
       - MODEL_TEMPLATE_DIR=/opt/model-configs
@@ -92,6 +87,8 @@ services:
     image: ${VLLM_IMAGE_FAST:-vllm/vllm-openai:v0.5.4}
     container_name: vllm-fast
     runtime: nvidia
+    ports:
+      - "8001:8000"
     environment:
       - HUGGING_FACE_HUB_CACHE=/data/hf-cache
     volumes:
@@ -121,6 +118,8 @@ services:
     image: ${VLLM_IMAGE_QUALITY:-vllm/vllm-openai:v0.5.4}
     container_name: vllm-quality
     runtime: nvidia
+    ports:
+      - "8002:8000"
     environment:
       - HUGGING_FACE_HUB_CACHE=/data/hf-cache
     volumes:
@@ -150,6 +149,8 @@ services:
     image: ${VLLM_IMAGE_DEEPSEEK:-vllm/vllm-openai:v0.6.6.post1}
     container_name: vllm-deepseek
     runtime: nvidia
+    ports:
+      - "8003:8000"
     environment:
       - HUGGING_FACE_HUB_CACHE=/data/hf-cache
     volumes:
@@ -179,6 +180,8 @@ services:
     image: ${VLLM_IMAGE_QWEN_MAX:-vllm/vllm-openai:v0.5.4}
     container_name: vllm-qwen32b
     runtime: nvidia
+    ports:
+      - "8004:8000"
     environment:
       - HUGGING_FACE_HUB_CACHE=/data/hf-cache
     volumes:
@@ -208,6 +211,8 @@ services:
     image: ${COMFYUI_IMAGE:-yanwk/comfyui-boot:cu126-slim}
     container_name: comfyui
     runtime: nvidia
+    ports:
+      - "8188:8188"
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
@@ -233,11 +238,6 @@ services:
     profiles: ["comfy"]
 
   open-webui:
-    environment:
-      OPENAI_API_BASE_URL: http://litellm:4000/v1
-      OPENAI_API_KEY: ${LITELLM_KEY:?LITELLM_KEY is required}
-      ENABLE_FORWARD_USER_INFO_HEADERS: "True"
-    ports: !reset []
     volumes:
       - /opt/ai/openwebui-data:/app/backend/data
 
@@ -246,19 +246,20 @@ services:
       context: ./admin
     container_name: admin-panel
     environment:
-      - ADMIN_JWT_SECRET=${ADMIN_JWT_SECRET:?ADMIN_JWT_SECRET is required}
+      - ADMIN_JWT_SECRET=${ADMIN_JWT_SECRET:-change-this-jwt-secret}
       - MODEL_SWITCHER_URL=http://model-switcher:9000
-      - MODEL_SWITCHER_TOKEN=${MODEL_SWITCHER_TOKEN:?MODEL_SWITCHER_TOKEN is required}
+      - MODEL_SWITCHER_TOKEN=${MODEL_SWITCHER_TOKEN:-change_me}
       - DOCKER_PROXY_URL=http://docker-socket-proxy:2375
       - WEBUI_DB_PATH=/webui-data/webui.db
       - LITELLM_URL=http://litellm:4000
-      - LITELLM_KEY=${LITELLM_KEY:?LITELLM_KEY is required}
-      - ADMIN_COOKIE_SECURE=1
+      - LITELLM_KEY=${LITELLM_KEY:-}
     volumes:
       - /opt/ai/openwebui-data:/webui-data:ro
     networks:
       - default
       - switcher-net
+    ports:
+      - "80:8080"
     depends_on:
       model-switcher:
         condition: service_healthy
@@ -267,31 +268,6 @@ services:
     read_only: true
     tmpfs:
       - /tmp
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    restart: unless-stopped
-
-  edge-proxy:
-    image: ${EDGE_PROXY_IMAGE:-nginx:1.27.4-alpine}
-    container_name: edge-proxy
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./ops/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./ops/nginx/conf.d:/etc/nginx/conf.d:ro
-      - /opt/ai/certs:/etc/nginx/certs:ro
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost/nginx-health || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    read_only: true
-    tmpfs:
-      - /var/cache/nginx
-      - /var/run
     cap_drop:
       - ALL
     security_opt:

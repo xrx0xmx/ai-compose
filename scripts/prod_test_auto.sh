@@ -216,8 +216,7 @@ run_step "mode_comfy_on_safe" "strict" "MODEL_SWITCHER_TOKEN='$MODEL_SWITCHER_TO
 run_step "mode_comfy_status" "strict" "MODEL_SWITCHER_TOKEN='$MODEL_SWITCHER_TOKEN' make prod-mode-status >/dev/null"
 run_step "mode_comfy_off" "strict" "MODEL_SWITCHER_TOKEN='$MODEL_SWITCHER_TOKEN' MODEL='qwen-fast' make prod-comfy-off >/dev/null"
 run_step "mode_back_to_llm" "strict" "MODEL_SWITCHER_TOKEN='$MODEL_SWITCHER_TOKEN' API_KEY='$LITELLM_KEY' make prod-test"
-run_step "edge_proxy_check" "strict" "make prod-proxy-check"
-run_step "ports_audit" "strict" "make prod-ports-audit"
+run_step "ports_check" "strict" "make prod-ports-check"
 
 if [[ "$EXTENSIVE" == "1" ]]; then
   BAD_MODEL_ID="$(normalize_model_id "auto-test-invalid-model")"
