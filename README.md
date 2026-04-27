@@ -108,6 +108,14 @@ ALLOW_LEGACY_MODEL_SWITCHER_TOKEN=1 make prod-preflight-env
 Úsala solo si el token actual del `model-switcher` es débil o heredado y aún no vas a rotarlo coordinadamente.
 En esta fase de compatibilidad priorizamos no romper producción sobre endurecer inmediatamente ese secreto.
 
+Excepción legacy adicional para admin:
+
+```bash
+ALLOW_LEGACY_ADMIN_JWT_SECRET=1 make prod-preflight-env
+```
+
+Úsala solo si el secreto actual del admin es heredado y todavía no vas a rotarlo con reinicio coordinado del servicio.
+
 ## Producción (servidor con GPU)
 
 Directorios en el servidor (propiedad de aiservices:aiservices):
@@ -148,7 +156,7 @@ Esto levanta servicios base y crea contenedores de modelos/comfy.
 ```bash
 cp .env .env.backup.$(date +%Y%m%d%H%M%S)
 cp versions.lock versions.lock.backup.$(date +%Y%m%d%H%M%S)
-ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 ALLOW_LEGACY_MODEL_SWITCHER_TOKEN=1 make prod-preflight-env
+ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 ALLOW_LEGACY_MODEL_SWITCHER_TOKEN=1 ALLOW_LEGACY_ADMIN_JWT_SECRET=1 make prod-preflight-env
 make prod-image-lock-check
 ```
 
@@ -162,15 +170,15 @@ make prod-init
 ### Upgrade canary (automatizado)
 
 ```bash
-ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 ALLOW_LEGACY_MODEL_SWITCHER_TOKEN=1 make prod-upgrade-precheck
-ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 ALLOW_LEGACY_MODEL_SWITCHER_TOKEN=1 make prod-upgrade-canary
+ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 ALLOW_LEGACY_MODEL_SWITCHER_TOKEN=1 ALLOW_LEGACY_ADMIN_JWT_SECRET=1 make prod-upgrade-precheck
+ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 ALLOW_LEGACY_MODEL_SWITCHER_TOKEN=1 ALLOW_LEGACY_ADMIN_JWT_SECRET=1 make prod-upgrade-canary
 MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-upgrade-verify
 ```
 
 Atajo todo-en-uno:
 
 ```bash
-ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 ALLOW_LEGACY_MODEL_SWITCHER_TOKEN=1 MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-upgrade-promote
+ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 ALLOW_LEGACY_MODEL_SWITCHER_TOKEN=1 ALLOW_LEGACY_ADMIN_JWT_SECRET=1 MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-upgrade-promote
 ```
 
 Rollback:

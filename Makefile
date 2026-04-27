@@ -38,6 +38,7 @@ ADMIN_URL ?= $(HOST_BASE_URL)/admin
 ALLOW_LEGACY_POSTGRES_PASSWORD ?= 0
 ALLOW_LEGACY_LITELLM_KEY ?= 0
 ALLOW_LEGACY_MODEL_SWITCHER_TOKEN ?= 0
+ALLOW_LEGACY_ADMIN_JWT_SECRET ?= 0
 
 -include Makefile.ops
 -include versions.lock
@@ -196,6 +197,10 @@ prod-preflight-env:
 	    return 0; \
 	  fi; \
 	  if [ "$$name" = "MODEL_SWITCHER_TOKEN" ] && [ "$(ALLOW_LEGACY_MODEL_SWITCHER_TOKEN)" = "1" ]; then \
+	    echo "WARN: $$name omite validacion de entropia por compatibilidad legacy."; \
+	    return 0; \
+	  fi; \
+	  if [ "$$name" = "ADMIN_JWT_SECRET" ] && [ "$(ALLOW_LEGACY_ADMIN_JWT_SECRET)" = "1" ]; then \
 	    echo "WARN: $$name omite validacion de entropia por compatibilidad legacy."; \
 	    return 0; \
 	  fi; \
