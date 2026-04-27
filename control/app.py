@@ -1,15 +1,11 @@
 import os
-import json
-import re
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote, urlparse
 
 import requests
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 TOKEN = os.getenv("MODEL_SWITCHER_TOKEN", "")
@@ -27,37 +23,8 @@ LITELLM_VERIFY_TIMEOUT_SECONDS = int(os.getenv("MODEL_SWITCHER_LITELLM_VERIFY_TI
 
 ACTIVE_CONFIG = os.path.join(CONFIG_DIR, "active.yml")
 ACTIVE_MODEL_FILE = os.path.join(CONFIG_DIR, "active.model")
-ACTIVE_MODE_FILE = os.path.join(CONFIG_DIR, "active.mode")
-ACTIVE_COMFY_LEASE_FILE = os.path.join(CONFIG_DIR, "active.mode.lease_until")
-MODEL_REGISTRY_FILE = os.path.join(CONFIG_DIR, "models.registry.json")
-DYNAMIC_TEMPLATE_DIR = os.path.join(CONFIG_DIR, "model-templates")
-DOCKER_DEFAULT_NETWORK = os.getenv("MODEL_SWITCHER_DOCKER_NETWORK", "ai_default")
-HF_CACHE_HOST_PATH = os.getenv("MODEL_SWITCHER_HF_CACHE_HOST_PATH", "/opt/ai/hf-cache")
-HF_CACHE_CONTAINER_PATH = os.getenv("MODEL_SWITCHER_HF_CACHE_CONTAINER_PATH", "/data/hf-cache")
-DYNAMIC_VLLM_IMAGE = os.getenv("MODEL_SWITCHER_DYNAMIC_VLLM_IMAGE", "vllm/vllm-openai:v0.6.6.post1")
-DYNAMIC_VLLM_DTYPE = os.getenv("MODEL_SWITCHER_DYNAMIC_DTYPE", "half")
-MODEL_SWITCHER_DYNAMIC_ALLOW_TRUST_REMOTE_CODE = os.getenv(
-  "MODEL_SWITCHER_DYNAMIC_ALLOW_TRUST_REMOTE_CODE",
-  "0",
-).strip().lower() in {"1", "true", "yes", "on"}
-MODEL_SWITCHER_TRUSTED_REPOS = {
-  item.strip().lower()
-  for item in os.getenv("MODEL_SWITCHER_TRUSTED_REPOS", "").split(",")
-  if item.strip()
-}
-ALLOWED_DYNAMIC_EXTRA_FLAGS = {
-  "--tensor-parallel-size",
-  "--max-model-len",
-  "--gpu-memory-utilization",
-  "--max-num-seqs",
-  "--tokenizer",
-  "--revision",
-}
-ALLOWED_DYNAMIC_EXTRA_BOOL_FLAGS = {
-  "--enforce-eager",
-}
 
-BASE_MODELS: Dict[str, Dict[str, Any]] = {
+MODELS: Dict[str, Dict[str, str]] = {
   "qwen-fast": {
     "container": "vllm-fast",
     "template": "qwen-fast.yml",
@@ -79,58 +46,19 @@ BASE_MODELS: Dict[str, Dict[str, Any]] = {
     "litellm_model": "qwen-max",
   },
 }
-MODELS: Dict[str, Dict[str, Any]] = dict(BASE_MODELS)
 
 LITELLM_CONTAINER = "litellm"
-COMFY_CONTAINER = os.getenv("MODEL_SWITCHER_COMFY_CONTAINER", "comfyui")
-MODE_LLM = "llm"
-MODE_COMFY = "comfy"
-VALID_MODES = {MODE_LLM, MODE_COMFY}
-DEFAULT_COMFY_TTL_MINUTES = int(os.getenv("MODEL_SWITCHER_COMFY_DEFAULT_TTL_MINUTES", "45"))
-MAX_COMFY_TTL_MINUTES = int(os.getenv("MODEL_SWITCHER_COMFY_MAX_TTL_MINUTES", "90"))
-MODE_MONITOR_POLL_SECONDS = int(os.getenv("MODEL_SWITCHER_MODE_POLL_INTERVAL_SECONDS", "5"))
-FINAL_SWITCH_STATES = {"success", "failed", "rolled_back"}
-UNSET = object()
 
-app = FastAPI(title="AI Model Switcher", version="2.5.0")
+app = FastAPI(title="AI Model Switcher", version="2.1.0")
 
 SWITCH_LOCK = threading.Lock()
 STATE_LOCK = threading.Lock()
-SWITCH_STATE_LOCK = threading.Lock()
 LAST_ERROR: Optional[str] = None
 LAST_SWITCH_AT: Optional[str] = None
-SWITCH_ID_SEQ = 0
-CURRENT_SWITCH: Optional[Dict[str, Any]] = None
-MODE_MONITOR_THREAD: Optional[threading.Thread] = None
-MODE_MONITOR_LOCK = threading.Lock()
 
 
 class SwitchRequest(BaseModel):
   model: str
-  wait_for_ready: bool = True
-
-
-class ModeSwitchRequest(BaseModel):
-  mode: str
-  model: Optional[str] = None
-  ttl_minutes: Optional[int] = None
-  wait_for_ready: bool = True
-
-
-class RegisterHuggingFaceModelRequest(BaseModel):
-  huggingface_url: str
-  model_id: Optional[str] = None
-  litellm_model: Optional[str] = None
-  quantization: Optional[str] = None
-  gpu_memory_utilization: Optional[float] = None
-  max_model_len: Optional[int] = None
-  max_num_seqs: Optional[int] = None
-  trust_remote_code: bool = False
-  tokenizer: Optional[str] = None
-  revision: Optional[str] = None
-  dtype: Optional[str] = None
-  vllm_image: Optional[str] = None
-  extra_args: Optional[List[str]] = None
 
 
 def utc_now() -> str:
@@ -145,383 +73,6 @@ def require_token(authorization: Optional[str] = Header(default=None)) -> None:
   supplied = authorization.split(" ", 1)[1].strip()
   if supplied != TOKEN:
     raise HTTPException(status_code=403, detail="Invalid token")
-
-
-def env_float(name: str, fallback: float) -> float:
-  raw = os.getenv(name)
-  if raw is None:
-    return fallback
-  try:
-    return float(raw)
-  except ValueError:
-    return fallback
-
-
-def env_int(name: str, fallback: int) -> int:
-  raw = os.getenv(name)
-  if raw is None:
-    return fallback
-  try:
-    return int(raw)
-  except ValueError:
-    return fallback
-
-
-def normalize_model_id(value: str) -> str:
-  slug = re.sub(r"[^a-z0-9-]+", "-", value.strip().lower())
-  slug = re.sub(r"-{2,}", "-", slug).strip("-")
-  if not slug:
-    raise ValueError("model_id must contain at least one alphanumeric character")
-  return slug
-
-
-def parse_huggingface_repo(value: str) -> str:
-  candidate = value.strip()
-  if not candidate:
-    raise HTTPException(status_code=400, detail="huggingface_url is required")
-
-  parsed = urlparse(candidate)
-  if parsed.scheme and parsed.netloc:
-    if "huggingface.co" not in parsed.netloc.lower():
-      raise HTTPException(status_code=400, detail="only huggingface.co URLs are supported")
-    path_parts = [part for part in parsed.path.strip("/").split("/") if part]
-    if path_parts and path_parts[0] in {"models", "spaces"}:
-      path_parts = path_parts[1:]
-    if len(path_parts) < 2:
-      raise HTTPException(status_code=400, detail="invalid huggingface URL; expected /org/repo")
-    return f"{path_parts[0]}/{path_parts[1]}"
-
-  if re.match(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$", candidate):
-    return candidate
-
-  raise HTTPException(status_code=400, detail="invalid huggingface reference; use URL or org/repo")
-
-
-def normalize_repo_slug(value: str) -> str:
-  slug = value.strip().lower()
-  if not re.match(r"^[a-z0-9._-]+/[a-z0-9._-]+$", slug):
-    raise HTTPException(status_code=400, detail="invalid repository slug")
-  return slug
-
-
-def quantization_for_repo(repo: str, requested: Optional[str]) -> Optional[str]:
-  if requested is not None:
-    value = requested.strip().lower()
-    return value or None
-  lowered = repo.lower()
-  if "awq" in lowered:
-    return "awq"
-  if "gptq" in lowered:
-    return "gptq"
-  return None
-
-
-def normalize_non_empty(value: Optional[str]) -> Optional[str]:
-  if value is None:
-    return None
-  normalized = value.strip()
-  return normalized if normalized else None
-
-
-def validate_extra_args(extra_args: Optional[List[str]]) -> List[str]:
-  if extra_args is None:
-    return []
-  cleaned = [str(item).strip() for item in extra_args if str(item).strip()]
-  if not cleaned:
-    return []
-
-  validated: List[str] = []
-  idx = 0
-  while idx < len(cleaned):
-    token = cleaned[idx]
-    if token in ALLOWED_DYNAMIC_EXTRA_BOOL_FLAGS:
-      validated.append(token)
-      idx += 1
-      continue
-
-    if token not in ALLOWED_DYNAMIC_EXTRA_FLAGS:
-      allowed = ", ".join(sorted(ALLOWED_DYNAMIC_EXTRA_FLAGS | ALLOWED_DYNAMIC_EXTRA_BOOL_FLAGS))
-      raise HTTPException(status_code=400, detail=f"unsupported extra arg '{token}'. Allowed: {allowed}")
-
-    if idx + 1 >= len(cleaned):
-      raise HTTPException(status_code=400, detail=f"missing value for '{token}'")
-
-    value = cleaned[idx + 1]
-    if value.startswith("--"):
-      raise HTTPException(status_code=400, detail=f"missing value for '{token}'")
-
-    validated.extend([token, value])
-    idx += 2
-
-  return validated
-
-
-def validate_trust_remote_code(trust_remote_code: bool, hf_repo: str) -> bool:
-  if not trust_remote_code:
-    return False
-  if not MODEL_SWITCHER_DYNAMIC_ALLOW_TRUST_REMOTE_CODE:
-    raise HTTPException(status_code=400, detail="trust_remote_code is disabled by policy")
-  normalized_repo = normalize_repo_slug(hf_repo)
-  if normalized_repo not in MODEL_SWITCHER_TRUSTED_REPOS:
-    raise HTTPException(
-      status_code=400,
-      detail=f"trust_remote_code is only allowed for trusted repos. Missing: {normalized_repo}",
-    )
-  return True
-
-
-def model_template_path(model_meta: Dict[str, Any]) -> str:
-  template_name = str(model_meta.get("template", "")).strip()
-  if not template_name:
-    raise RuntimeError("template name is missing")
-  if os.path.isabs(template_name):
-    return template_name
-  if model_meta.get("dynamic"):
-    return os.path.join(DYNAMIC_TEMPLATE_DIR, template_name)
-  return os.path.join(TEMPLATE_DIR, template_name)
-
-
-def render_litellm_template(*, litellm_model: str, hf_repo: str, container_name: str) -> str:
-  return (
-    "model_list:\n"
-    f"  - model_name: {litellm_model}\n"
-    "    litellm_params:\n"
-    f"      model: openai/{hf_repo}\n"
-    f"      api_base: http://{container_name}:8000/v1\n"
-    "      api_key: EMPTY\n"
-    "\n"
-    "general_settings:\n"
-    "  master_key: \"cambiaLAclave\"\n"
-    "  database_url: \"os.environ/DATABASE_URL\"\n"
-  )
-
-
-def model_public_payload(model_id: str, meta: Dict[str, Any]) -> Dict[str, Any]:
-  return {
-    "id": model_id,
-    "container": meta["container"],
-    "template": meta["template"],
-    "litellm_model": meta["litellm_model"],
-    "hf_repo": meta.get("hf_repo"),
-    "dynamic": bool(meta.get("dynamic", False)),
-    "vllm_image": meta.get("vllm_image"),
-    "dtype": meta.get("dtype"),
-    "quantization": meta.get("quantization"),
-    "trust_remote_code": bool(meta.get("trust_remote_code", False)),
-    "tokenizer": meta.get("tokenizer"),
-    "revision": meta.get("revision"),
-    "extra_args": list(meta.get("extra_args", [])),
-  }
-
-
-def read_registry() -> Dict[str, Any]:
-  raw = read_optional_text(MODEL_REGISTRY_FILE)
-  if raw is None:
-    return {"version": 1, "models": []}
-  try:
-    payload = json.loads(raw)
-  except json.JSONDecodeError:
-    return {"version": 1, "models": []}
-  if not isinstance(payload, dict):
-    return {"version": 1, "models": []}
-  models = payload.get("models")
-  if not isinstance(models, list):
-    payload["models"] = []
-  if "version" not in payload:
-    payload["version"] = 1
-  return payload
-
-
-def write_registry(payload: Dict[str, Any]) -> None:
-  os.makedirs(CONFIG_DIR, exist_ok=True)
-  content = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-  write_text(MODEL_REGISTRY_FILE, content)
-
-
-def load_dynamic_models() -> Dict[str, Dict[str, Any]]:
-  payload = read_registry()
-  dynamic: Dict[str, Dict[str, Any]] = {}
-  for item in payload.get("models", []):
-    if not isinstance(item, dict):
-      continue
-    model_id = item.get("id")
-    container = item.get("container")
-    template = item.get("template")
-    litellm_model = item.get("litellm_model")
-    hf_repo = item.get("hf_repo")
-    if not all(isinstance(value, str) and value.strip() for value in [model_id, container, template, litellm_model, hf_repo]):
-      continue
-
-    try:
-      normalized_id = normalize_model_id(model_id)
-    except ValueError:
-      continue
-    if normalized_id in BASE_MODELS:
-      continue
-
-    try:
-      gpu_memory_utilization = float(item.get("gpu_memory_utilization") or env_float("MODEL_SWITCHER_DYNAMIC_GPU_MEMORY_UTILIZATION", 0.90))
-      max_model_len = int(item.get("max_model_len") or env_int("MODEL_SWITCHER_DYNAMIC_MAX_MODEL_LEN", 4096))
-      max_num_seqs = int(item.get("max_num_seqs") or env_int("MODEL_SWITCHER_DYNAMIC_MAX_NUM_SEQS", 1))
-    except (TypeError, ValueError):
-      continue
-
-    try:
-      extra_args = validate_extra_args(item.get("extra_args")) if isinstance(item.get("extra_args"), list) else []
-    except HTTPException:
-      continue
-
-    dynamic[normalized_id] = {
-      "container": container.strip(),
-      "template": template.strip(),
-      "litellm_model": litellm_model.strip(),
-      "hf_repo": hf_repo.strip(),
-      "dynamic": True,
-      "vllm_image": str(item.get("vllm_image") or DYNAMIC_VLLM_IMAGE),
-      "dtype": str(item.get("dtype") or DYNAMIC_VLLM_DTYPE).strip(),
-      "quantization": item.get("quantization"),
-      "gpu_memory_utilization": gpu_memory_utilization,
-      "max_model_len": max_model_len,
-      "max_num_seqs": max_num_seqs,
-      "trust_remote_code": bool(item.get("trust_remote_code", False)),
-      "tokenizer": normalize_non_empty(item.get("tokenizer")),
-      "revision": normalize_non_empty(item.get("revision")),
-      "extra_args": extra_args,
-    }
-  return dynamic
-
-
-def reload_models_registry() -> None:
-  global MODELS
-  combined = dict(BASE_MODELS)
-  combined.update(load_dynamic_models())
-  MODELS = combined
-
-
-def persist_dynamic_model(model_id: str, model_meta: Dict[str, Any]) -> None:
-  payload = read_registry()
-  models_raw = payload.get("models", [])
-  models: List[Dict[str, Any]] = [item for item in models_raw if isinstance(item, dict)]
-
-  filtered: List[Dict[str, Any]] = []
-  for item in models:
-    try:
-      existing_id = normalize_model_id(str(item.get("id", "")))
-    except ValueError:
-      continue
-    if existing_id != model_id:
-      filtered.append(item)
-  filtered.append(
-    {
-      "id": model_id,
-      "container": model_meta["container"],
-      "template": model_meta["template"],
-      "litellm_model": model_meta["litellm_model"],
-      "hf_repo": model_meta["hf_repo"],
-      "dynamic": True,
-      "vllm_image": model_meta["vllm_image"],
-      "dtype": model_meta["dtype"],
-      "quantization": model_meta.get("quantization"),
-      "gpu_memory_utilization": model_meta["gpu_memory_utilization"],
-      "max_model_len": model_meta["max_model_len"],
-      "max_num_seqs": model_meta["max_num_seqs"],
-      "trust_remote_code": bool(model_meta.get("trust_remote_code", False)),
-      "tokenizer": model_meta.get("tokenizer"),
-      "revision": model_meta.get("revision"),
-      "extra_args": list(model_meta.get("extra_args", [])),
-    }
-  )
-  payload["models"] = filtered
-  payload["version"] = 1
-  write_registry(payload)
-
-
-def remove_dynamic_model_from_registry(model_id: str) -> bool:
-  payload = read_registry()
-  models_raw = payload.get("models", [])
-  models: List[Dict[str, Any]] = [item for item in models_raw if isinstance(item, dict)]
-
-  filtered: List[Dict[str, Any]] = []
-  removed = False
-  for item in models:
-    try:
-      existing_id = normalize_model_id(str(item.get("id", "")))
-    except ValueError:
-      continue
-    if existing_id == model_id:
-      removed = True
-      continue
-    filtered.append(item)
-
-  payload["models"] = filtered
-  payload["version"] = 1
-  write_registry(payload)
-  return removed
-
-
-def build_dynamic_model(
-  req: RegisterHuggingFaceModelRequest,
-) -> Dict[str, Any]:
-  hf_repo = parse_huggingface_repo(req.huggingface_url)
-
-  try:
-    model_id = normalize_model_id(req.model_id if req.model_id else hf_repo.replace("/", "-"))
-  except ValueError as exc:
-    raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-  if model_id in BASE_MODELS:
-    raise HTTPException(status_code=409, detail=f"model id '{model_id}' is reserved by a built-in model")
-  if model_id in MODELS:
-    raise HTTPException(status_code=409, detail=f"model id '{model_id}' already exists")
-
-  litellm_model = req.litellm_model.strip() if req.litellm_model else model_id
-  if not litellm_model:
-    raise HTTPException(status_code=400, detail="litellm_model cannot be empty")
-
-  gpu_memory = req.gpu_memory_utilization
-  if gpu_memory is None:
-    gpu_memory = env_float("MODEL_SWITCHER_DYNAMIC_GPU_MEMORY_UTILIZATION", 0.90)
-  if gpu_memory <= 0 or gpu_memory > 0.99:
-    raise HTTPException(status_code=400, detail="gpu_memory_utilization must be > 0 and <= 0.99")
-
-  max_model_len = req.max_model_len
-  if max_model_len is None:
-    max_model_len = env_int("MODEL_SWITCHER_DYNAMIC_MAX_MODEL_LEN", 4096)
-  if max_model_len <= 0:
-    raise HTTPException(status_code=400, detail="max_model_len must be > 0")
-
-  max_num_seqs = req.max_num_seqs
-  if max_num_seqs is None:
-    max_num_seqs = env_int("MODEL_SWITCHER_DYNAMIC_MAX_NUM_SEQS", 1)
-  if max_num_seqs <= 0:
-    raise HTTPException(status_code=400, detail="max_num_seqs must be > 0")
-
-  template_name = f"{model_id}.yml"
-  quantization = quantization_for_repo(hf_repo, req.quantization)
-  trust_remote_code = validate_trust_remote_code(bool(req.trust_remote_code), hf_repo)
-  tokenizer = normalize_non_empty(req.tokenizer)
-  revision = normalize_non_empty(req.revision)
-  dtype = normalize_non_empty(req.dtype) or DYNAMIC_VLLM_DTYPE
-  vllm_image = normalize_non_empty(req.vllm_image) or DYNAMIC_VLLM_IMAGE
-  extra_args = validate_extra_args(req.extra_args)
-  return {
-    "id": model_id,
-    "container": f"vllm-{model_id}",
-    "template": template_name,
-    "litellm_model": litellm_model,
-    "hf_repo": hf_repo,
-    "dynamic": True,
-    "vllm_image": vllm_image,
-    "dtype": dtype,
-    "quantization": quantization,
-    "gpu_memory_utilization": float(gpu_memory),
-    "max_model_len": int(max_model_len),
-    "max_num_seqs": int(max_num_seqs),
-    "trust_remote_code": trust_remote_code,
-    "tokenizer": tokenizer,
-    "revision": revision,
-    "extra_args": extra_args,
-  }
 
 
 def set_runtime_state(*, last_error: Optional[str] = None, clear_error: bool = False) -> None:
@@ -543,135 +94,11 @@ def runtime_state() -> Dict[str, Optional[str]]:
     }
 
 
-def _elapsed_ms(switch_state: Dict[str, Any]) -> int:
-  started = switch_state.get("_started_monotonic")
-  if isinstance(started, (int, float)):
-    return int((time.monotonic() - started) * 1000)
-  duration = switch_state.get("duration_ms")
-  return int(duration) if isinstance(duration, int) else 0
-
-
-def _public_switch_state(switch_state: Dict[str, Any]) -> Dict[str, Any]:
-  duration_ms = switch_state.get("duration_ms")
-  if not isinstance(duration_ms, int):
-    duration_ms = 0
-  if switch_state.get("finished_at") is None:
-    duration_ms = _elapsed_ms(switch_state)
-
-  return {
-    "id": switch_state.get("id"),
-    "state": switch_state.get("state"),
-    "from_model": switch_state.get("from_model"),
-    "to_model": switch_state.get("to_model"),
-    "current_step": switch_state.get("current_step"),
-    "state_text": switch_state.get("state_text"),
-    "started_at": switch_state.get("started_at"),
-    "updated_at": switch_state.get("updated_at"),
-    "finished_at": switch_state.get("finished_at"),
-    "duration_ms": duration_ms,
-    "error": switch_state.get("error"),
-    "steps": [dict(item) for item in switch_state.get("steps", [])],
-    "ready": bool(switch_state.get("ready", False)),
-  }
-
-
-def current_switch_snapshot() -> Optional[Dict[str, Any]]:
-  with SWITCH_STATE_LOCK:
-    if CURRENT_SWITCH is None:
-      return None
-    return _public_switch_state(CURRENT_SWITCH)
-
-
-def create_switch_state(
-  *,
-  to_model: str,
-  state: str,
-  state_text: str,
-  from_model: Optional[str] = None,
-  current_step: Optional[str] = None,
-) -> int:
-  global SWITCH_ID_SEQ
-  global CURRENT_SWITCH
-
-  now = utc_now()
-  with SWITCH_STATE_LOCK:
-    SWITCH_ID_SEQ += 1
-    switch_id = SWITCH_ID_SEQ
-    CURRENT_SWITCH = {
-      "id": switch_id,
-      "state": state,
-      "from_model": from_model,
-      "to_model": to_model,
-      "current_step": current_step,
-      "state_text": state_text,
-      "started_at": now,
-      "updated_at": now,
-      "finished_at": None,
-      "duration_ms": 0,
-      "error": None,
-      "steps": [],
-      "ready": False,
-      "_started_monotonic": time.monotonic(),
-    }
-
-  return switch_id
-
-
-def update_switch_state(
-  switch_id: int,
-  *,
-  state: Any = UNSET,
-  from_model: Any = UNSET,
-  to_model: Any = UNSET,
-  current_step: Any = UNSET,
-  state_text: Any = UNSET,
-  error: Any = UNSET,
-  ready: Any = UNSET,
-  steps: Optional[List[Dict[str, Any]]] = None,
-) -> None:
-  with SWITCH_STATE_LOCK:
-    if CURRENT_SWITCH is None or CURRENT_SWITCH.get("id") != switch_id:
-      return
-
-    now = utc_now()
-
-    if state is not UNSET:
-      CURRENT_SWITCH["state"] = state
-    if from_model is not UNSET:
-      CURRENT_SWITCH["from_model"] = from_model
-    if to_model is not UNSET:
-      CURRENT_SWITCH["to_model"] = to_model
-    if current_step is not UNSET:
-      CURRENT_SWITCH["current_step"] = current_step
-    if state_text is not UNSET:
-      CURRENT_SWITCH["state_text"] = state_text
-    if error is not UNSET:
-      CURRENT_SWITCH["error"] = error
-    if ready is not UNSET:
-      CURRENT_SWITCH["ready"] = bool(ready)
-    if steps is not None:
-      CURRENT_SWITCH["steps"] = [dict(item) for item in steps]
-
-    if CURRENT_SWITCH.get("finished_at") is None and CURRENT_SWITCH.get("state") in FINAL_SWITCH_STATES:
-      CURRENT_SWITCH["finished_at"] = now
-      CURRENT_SWITCH["duration_ms"] = _elapsed_ms(CURRENT_SWITCH)
-    elif CURRENT_SWITCH.get("finished_at") is None:
-      CURRENT_SWITCH["duration_ms"] = _elapsed_ms(CURRENT_SWITCH)
-
-    CURRENT_SWITCH["updated_at"] = now
-
-
-def docker_request(
-  method: str,
-  path: str,
-  *,
-  timeout: Optional[float] = None,
-  json_body: Optional[Dict[str, Any]] = None,
-) -> requests.Response:
+def docker_request(method: str, path: str, *, timeout: Optional[float] = None) -> requests.Response:
   url = f"{DOCKER_PROXY_URL}{path}"
   effective_timeout = timeout if timeout is not None else DOCKER_TIMEOUT_SECONDS
   try:
-    return requests.request(method, url, timeout=effective_timeout, json=json_body)
+    return requests.request(method, url, timeout=effective_timeout)
   except requests.RequestException as exc:
     raise RuntimeError(str(exc)) from exc
 
@@ -703,13 +130,6 @@ def container_stop(name: str) -> None:
   raise RuntimeError(f"docker error: {resp.text}")
 
 
-def container_create(name: str, spec: Dict[str, Any]) -> None:
-  resp = docker_request("POST", f"/containers/create?name={quote(name, safe='')}", json_body=spec)
-  if resp.status_code in (201, 409):
-    return
-  raise RuntimeError(f"docker error: {resp.text}")
-
-
 def read_optional_text(path: str) -> Optional[str]:
   try:
     with open(path, "r", encoding="utf-8") as handle:
@@ -730,84 +150,6 @@ def remove_file(path: str) -> None:
     return
 
 
-def parse_utc_iso(value: str) -> Optional[datetime]:
-  normalized = value.strip()
-  if not normalized:
-    return None
-  try:
-    parsed = datetime.fromisoformat(normalized)
-  except ValueError:
-    return None
-  if parsed.tzinfo is None:
-    return parsed.replace(tzinfo=timezone.utc)
-  return parsed.astimezone(timezone.utc)
-
-
-def active_mode() -> str:
-  raw = read_optional_text(ACTIVE_MODE_FILE)
-  if raw is None:
-    return MODE_LLM
-  mode = raw.strip().lower()
-  return mode if mode in VALID_MODES else MODE_LLM
-
-
-def set_active_mode(mode: str) -> None:
-  if mode not in VALID_MODES:
-    raise RuntimeError(f"invalid mode: {mode}")
-  os.makedirs(CONFIG_DIR, exist_ok=True)
-  write_text(ACTIVE_MODE_FILE, f"{mode}\n")
-  if mode != MODE_COMFY:
-    remove_file(ACTIVE_COMFY_LEASE_FILE)
-
-
-def comfy_lease_until() -> Optional[datetime]:
-  raw = read_optional_text(ACTIVE_COMFY_LEASE_FILE)
-  if raw is None:
-    return None
-  return parse_utc_iso(raw)
-
-
-def set_comfy_lease(ttl_minutes: int) -> datetime:
-  deadline = datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
-  write_text(ACTIVE_COMFY_LEASE_FILE, f"{deadline.isoformat()}\n")
-  return deadline
-
-
-def clear_comfy_lease() -> None:
-  remove_file(ACTIVE_COMFY_LEASE_FILE)
-
-
-def comfy_lease_status() -> Dict[str, Any]:
-  lease_until = comfy_lease_until()
-  if lease_until is None:
-    return {
-      "expires_at": None,
-      "remaining_seconds": None,
-      "expired": False,
-    }
-
-  now = datetime.now(timezone.utc)
-  remaining = int((lease_until - now).total_seconds())
-  return {
-    "expires_at": lease_until.isoformat(),
-    "remaining_seconds": max(remaining, 0),
-    "expired": remaining <= 0,
-  }
-
-
-def normalize_comfy_ttl(ttl_minutes: Optional[int]) -> int:
-  if ttl_minutes is None:
-    return DEFAULT_COMFY_TTL_MINUTES
-  if ttl_minutes <= 0:
-    raise HTTPException(status_code=400, detail="ttl_minutes must be greater than 0")
-  if ttl_minutes > MAX_COMFY_TTL_MINUTES:
-    raise HTTPException(
-      status_code=400,
-      detail=f"ttl_minutes must be <= {MAX_COMFY_TTL_MINUTES}",
-    )
-  return ttl_minutes
-
-
 def active_model() -> Optional[str]:
   value = read_optional_text(ACTIVE_MODEL_FILE)
   if value is None:
@@ -816,23 +158,10 @@ def active_model() -> Optional[str]:
   return current if current in MODELS else None
 
 
-def litellm_model_for_internal(model_id: Optional[str]) -> Optional[str]:
-  if model_id is None:
-    return None
-  model_meta = MODELS.get(model_id)
-  if model_meta is None:
-    return None
-  litellm_model = model_meta.get("litellm_model")
-  if not litellm_model:
-    return None
-  return str(litellm_model)
-
-
 def ensure_active_config(model: str) -> None:
   os.makedirs(CONFIG_DIR, exist_ok=True)
-  model_meta = MODELS[model]
-  template_name = str(model_meta["template"])
-  template_path = model_template_path(model_meta)
+  template_name = MODELS[model]["template"]
+  template_path = os.path.join(TEMPLATE_DIR, template_name)
   if not os.path.isfile(template_path):
     raise RuntimeError(f"template not found: {template_name}")
 
@@ -948,86 +277,6 @@ def wait_litellm_model(model: str, timeout_seconds: int) -> None:
   raise RuntimeError(f"litellm did not expose model '{model}' in time")
 
 
-def stop_all_model_containers() -> None:
-  for meta in MODELS.values():
-    container_stop(meta["container"])
-
-
-def dynamic_container_spec(model_meta: Dict[str, Any]) -> Dict[str, Any]:
-  quantization = str(model_meta.get("quantization") or "").strip()
-  command: List[str] = [
-    "--model", str(model_meta["hf_repo"]),
-    "--host", "0.0.0.0",
-    "--port", "8000",
-    "--dtype", str(model_meta["dtype"]),
-    "--max-model-len", str(model_meta["max_model_len"]),
-    "--gpu-memory-utilization", str(model_meta["gpu_memory_utilization"]),
-    "--max-num-seqs", str(model_meta["max_num_seqs"]),
-  ]
-  if quantization:
-    command.extend(["--quantization", quantization])
-  if model_meta.get("trust_remote_code"):
-    command.append("--trust-remote-code")
-  tokenizer = normalize_non_empty(model_meta.get("tokenizer"))
-  if tokenizer:
-    command.extend(["--tokenizer", tokenizer])
-  revision = normalize_non_empty(model_meta.get("revision"))
-  if revision:
-    command.extend(["--revision", revision])
-  extra_args = model_meta.get("extra_args", [])
-  if isinstance(extra_args, list):
-    command.extend([str(item) for item in extra_args if str(item).strip()])
-
-  return {
-    "Image": str(model_meta.get("vllm_image") or DYNAMIC_VLLM_IMAGE),
-    "Cmd": command,
-    "Env": [
-      f"HUGGING_FACE_HUB_CACHE={HF_CACHE_CONTAINER_PATH}",
-      f"HF_HOME={HF_CACHE_CONTAINER_PATH}",
-    ],
-    "HostConfig": {
-      "Runtime": "nvidia",
-      "Binds": [f"{HF_CACHE_HOST_PATH}:{HF_CACHE_CONTAINER_PATH}"],
-      "RestartPolicy": {"Name": "unless-stopped"},
-    },
-    "NetworkingConfig": {
-      "EndpointsConfig": {
-        DOCKER_DEFAULT_NETWORK: {}
-      }
-    },
-  }
-
-
-def ensure_model_container_created(model_id: str) -> None:
-  model_meta = MODELS[model_id]
-  container_name = str(model_meta["container"])
-  if container_json(container_name) is not None:
-    return
-
-  if not model_meta.get("dynamic"):
-    raise HTTPException(
-      status_code=412,
-      detail=(
-        f"target container is not created: {container_name}. "
-        "Run make prod-bootstrap-models first."
-      ),
-    )
-
-  spec = dynamic_container_spec(model_meta)
-  container_create(container_name, spec)
-
-
-def ensure_container_exists(name: str, bootstrap_target: str) -> None:
-  if container_json(name) is None:
-    raise HTTPException(
-      status_code=412,
-      detail=(
-        f"target container is not created: {name}. "
-        f"Run make {bootstrap_target} first."
-      ),
-    )
-
-
 def running_models_from_status(status: Dict[str, Any]) -> List[str]:
   value = status.get("running_models", [])
   if isinstance(value, list):
@@ -1066,91 +315,33 @@ def status_payload() -> Dict[str, Any]:
       "error": str(exc),
     }
 
-  comfy_info: Dict[str, Any]
-  try:
-    comfy_info = state_snapshot(COMFY_CONTAINER)
-  except RuntimeError as exc:
-    comfy_info = {
-      "exists": False,
-      "status": None,
-      "health": None,
-      "error": str(exc),
-    }
-
   runtime = runtime_state()
-  mode = active_mode()
-  lease = comfy_lease_status()
-  active_model_id = active_model()
-  active_litellm_model = litellm_model_for_internal(active_model_id)
 
   return {
     "running_models": running_models,
-    "active_model": active_model_id,
-    "active_litellm_model": active_litellm_model,
-    "active_mode": mode,
-    "mode": {
-      "active": mode,
-      "default": MODE_LLM,
-      "lease": lease,
-    },
+    "active_model": active_model(),
     "active_config": ACTIVE_CONFIG if os.path.exists(ACTIVE_CONFIG) else None,
-    "active_mode_file": ACTIVE_MODE_FILE if os.path.exists(ACTIVE_MODE_FILE) else None,
-    "active_comfy_lease_file": ACTIVE_COMFY_LEASE_FILE if os.path.exists(ACTIVE_COMFY_LEASE_FILE) else None,
     "containers": containers,
     "litellm": litellm_info,
-    "comfyui": comfy_info,
     "switch_in_progress": SWITCH_LOCK.locked(),
     "last_error": runtime["last_error"],
     "last_switch_at": runtime["last_switch_at"],
-    "switch": current_switch_snapshot(),
   }
 
 
-def add_step(
-  steps: List[Dict[str, Any]],
-  step: str,
-  ok: bool,
-  detail: str,
-  *,
-  switch_id: Optional[int] = None,
-  state: Optional[str] = None,
-  state_text: Optional[str] = None,
-  ready: Optional[bool] = None,
-  error: Any = UNSET,
-) -> None:
-  entry = {
-    "step": step,
-    "at": utc_now(),
-    "ok": ok,
-    "detail": detail,
-  }
-  steps.append(entry)
-
-  if switch_id is None:
-    return
-
-  switch_error = error
-  if switch_error is UNSET and not ok:
-    switch_error = detail
-
-  update_kwargs: Dict[str, Any] = {
-    "current_step": step,
-    "state_text": state_text if state_text is not None else detail,
-    "steps": steps,
-  }
-  if state is not None:
-    update_kwargs["state"] = state
-  if ready is not None:
-    update_kwargs["ready"] = ready
-  if switch_error is not UNSET:
-    update_kwargs["error"] = switch_error
-
-  update_switch_state(switch_id, **update_kwargs)
+def add_step(steps: List[Dict[str, Any]], step: str, ok: bool, detail: str) -> None:
+  steps.append(
+    {
+      "step": step,
+      "at": utc_now(),
+      "ok": ok,
+      "detail": detail,
+    }
+  )
 
 
 def switch_response(
   *,
-  switch_id: int,
   status: str,
   from_model: Optional[str],
   to_model: str,
@@ -1161,7 +352,6 @@ def switch_response(
   payload = status_payload()
   payload.update(
     {
-      "switch_id": switch_id,
       "status": status,
       "from_model": from_model,
       "to_model": to_model,
@@ -1173,1408 +363,9 @@ def switch_response(
   return payload
 
 
-def run_switch_pipeline(model: str, switch_id: int, *, raise_http_errors: bool) -> Dict[str, Any]:
-  started = time.monotonic()
-  steps: List[Dict[str, Any]] = []
-
-  previous_config = read_optional_text(ACTIVE_CONFIG)
-  previous_model_value = read_optional_text(ACTIVE_MODEL_FILE)
-
-  before = status_payload()
-  running_before = running_models_from_status(before)
-  from_model = running_before[0] if running_before else before.get("active_model")
-  litellm_before = before.get("litellm", {})
-  litellm_running_before = snapshot_is_running(litellm_before)
-  disruptive_started = False
-
-  update_switch_state(
-    switch_id,
-    state="running",
-    from_model=from_model,
-    to_model=model,
-    current_step="preflight",
-    state_text=f"Iniciando cambio a {model}",
-    ready=False,
-    error=None,
-    steps=steps,
-  )
-
-  try:
-    target_container = MODELS[model]["container"]
-    ensure_model_container_created(model)
-    add_step(
-      steps,
-      "preflight",
-      True,
-      f"target container exists: {target_container}",
-      switch_id=switch_id,
-      state="running",
-      state_text=f"Preflight OK para {target_container}",
-    )
-
-    update_switch_state(
-      switch_id,
-      current_step="stop_comfy",
-      state_text="Deteniendo ComfyUI",
-      state="running",
-    )
-    container_stop(COMFY_CONTAINER)
-    add_step(
-      steps,
-      "stop_comfy",
-      True,
-      "comfyui stopped",
-      switch_id=switch_id,
-      state="running",
-      state_text="ComfyUI detenido",
-    )
-
-    if from_model == model and len(running_before) == 1 and litellm_running_before:
-      add_step(
-        steps,
-        "noop",
-        True,
-        f"model '{model}' is already active",
-        switch_id=switch_id,
-        state="success",
-        state_text="Modelo disponible",
-        ready=True,
-        error=None,
-      )
-      set_runtime_state(clear_error=True)
-      set_active_mode(MODE_LLM)
-      clear_comfy_lease()
-      update_switch_state(
-        switch_id,
-        state="success",
-        current_step="complete",
-        state_text="Modelo disponible",
-        ready=True,
-        error=None,
-        steps=steps,
-      )
-      return switch_response(
-        switch_id=switch_id,
-        status="success",
-        from_model=from_model,
-        to_model=model,
-        steps=steps,
-        started=started,
-        error=None,
-      )
-
-    update_switch_state(
-      switch_id,
-      current_step="stop_litellm",
-      state_text="Deteniendo LiteLLM",
-      state="running",
-    )
-    container_stop(LITELLM_CONTAINER)
-    disruptive_started = True
-    add_step(
-      steps,
-      "stop_litellm",
-      True,
-      "litellm stopped",
-      switch_id=switch_id,
-      state="running",
-      state_text="LiteLLM detenido",
-    )
-
-    update_switch_state(
-      switch_id,
-      current_step="stop_models",
-      state_text="Deteniendo contenedores de modelo",
-      state="running",
-    )
-    stop_all_model_containers()
-    add_step(
-      steps,
-      "stop_models",
-      True,
-      "all vllm containers stopped",
-      switch_id=switch_id,
-      state="running",
-      state_text="Contenedores de modelo detenidos",
-    )
-
-    update_switch_state(
-      switch_id,
-      current_step="start_target",
-      state_text=f"Iniciando {target_container}",
-      state="running",
-    )
-    container_start(target_container)
-    add_step(
-      steps,
-      "start_target",
-      True,
-      f"started {target_container}",
-      switch_id=switch_id,
-      state="running",
-      state_text=f"{target_container} iniciado",
-    )
-
-    update_switch_state(
-      switch_id,
-      current_step="wait_target",
-      state_text=f"Esperando health de {target_container}",
-      state="running",
-    )
-    wait_container_ready(target_container, HEALTH_TIMEOUT_SECONDS)
-    add_step(
-      steps,
-      "wait_target",
-      True,
-      f"{target_container} is ready",
-      switch_id=switch_id,
-      state="running",
-      state_text=f"{target_container} listo",
-    )
-
-    ensure_active_config(model)
-    add_step(
-      steps,
-      "activate_config",
-      True,
-      f"active config set to {model}",
-      switch_id=switch_id,
-      state="running",
-      state_text=f"Configuracion activa actualizada a {model}",
-    )
-
-    update_switch_state(
-      switch_id,
-      current_step="start_litellm",
-      state_text="Iniciando LiteLLM",
-      state="running",
-    )
-    container_start(LITELLM_CONTAINER)
-    add_step(
-      steps,
-      "start_litellm",
-      True,
-      "litellm started",
-      switch_id=switch_id,
-      state="running",
-      state_text="LiteLLM iniciado",
-    )
-
-    litellm_model_name = MODELS[model]["litellm_model"]
-    update_switch_state(
-      switch_id,
-      current_step="verify_litellm",
-      state_text=f"Verificando modelo '{litellm_model_name}' en LiteLLM",
-      state="running",
-    )
-    wait_litellm_model(litellm_model_name, LITELLM_VERIFY_TIMEOUT_SECONDS)
-    add_step(
-      steps,
-      "verify_litellm",
-      True,
-      f"litellm exposes model '{litellm_model_name}'",
-      switch_id=switch_id,
-      state="success",
-      state_text="Modelo disponible",
-      ready=True,
-      error=None,
-    )
-
-    set_runtime_state(clear_error=True)
-    set_active_mode(MODE_LLM)
-    clear_comfy_lease()
-    update_switch_state(
-      switch_id,
-      state="success",
-      from_model=from_model,
-      to_model=model,
-      current_step="complete",
-      state_text="Modelo disponible",
-      ready=True,
-      error=None,
-      steps=steps,
-    )
-    return switch_response(
-      switch_id=switch_id,
-      status="success",
-      from_model=from_model,
-      to_model=model,
-      steps=steps,
-      started=started,
-      error=None,
-    )
-
-  except HTTPException as exc:
-    if raise_http_errors:
-      update_switch_state(
-        switch_id,
-        state="failed",
-        from_model=from_model,
-        to_model=model,
-        current_step="switch_error",
-        state_text=f"Error: {exc.detail}",
-        ready=False,
-        error=str(exc.detail),
-        steps=steps,
-      )
-      raise
-
-    error_detail = str(exc.detail)
-    add_step(
-      steps,
-      "switch_error",
-      False,
-      error_detail,
-      switch_id=switch_id,
-      state="failed",
-      state_text="Error en cambio de modelo",
-      ready=False,
-      error=error_detail,
-    )
-    set_runtime_state(last_error=error_detail)
-    update_switch_state(
-      switch_id,
-      state="failed",
-      from_model=from_model,
-      to_model=model,
-      current_step="complete",
-      state_text="Error en cambio de modelo",
-      ready=False,
-      error=error_detail,
-      steps=steps,
-    )
-    return switch_response(
-      switch_id=switch_id,
-      status="failed",
-      from_model=from_model,
-      to_model=model,
-      steps=steps,
-      started=started,
-      error=error_detail,
-    )
-
-  except Exception as exc:
-    error_detail = str(exc)
-    add_step(
-      steps,
-      "switch_error",
-      False,
-      error_detail,
-      switch_id=switch_id,
-      state="running",
-      state_text="Error detectado, iniciando rollback",
-      ready=False,
-      error=error_detail,
-    )
-
-    final_status = "failed"
-
-    if disruptive_started and from_model and from_model in MODELS and from_model != model:
-      try:
-        update_switch_state(
-          switch_id,
-          current_step="rollback_restore_config",
-          state_text="Rollback: restaurando configuracion activa",
-          state="running",
-        )
-        restore_active_files(previous_config, previous_model_value)
-        add_step(
-          steps,
-          "rollback_restore_config",
-          True,
-          "active config restored",
-          switch_id=switch_id,
-          state="running",
-          state_text="Rollback: configuracion restaurada",
-        )
-
-        update_switch_state(
-          switch_id,
-          current_step="rollback_stop_models",
-          state_text="Rollback: deteniendo modelos",
-          state="running",
-        )
-        stop_all_model_containers()
-        add_step(
-          steps,
-          "rollback_stop_models",
-          True,
-          "all vllm containers stopped",
-          switch_id=switch_id,
-          state="running",
-          state_text="Rollback: modelos detenidos",
-        )
-
-        rollback_container = MODELS[from_model]["container"]
-        if container_json(rollback_container) is None:
-          raise RuntimeError(f"rollback container missing: {rollback_container}")
-
-        update_switch_state(
-          switch_id,
-          current_step="rollback_start_previous",
-          state_text=f"Rollback: iniciando {rollback_container}",
-          state="running",
-        )
-        container_start(rollback_container)
-        wait_container_ready(rollback_container, HEALTH_TIMEOUT_SECONDS)
-        add_step(
-          steps,
-          "rollback_start_previous",
-          True,
-          f"restored {from_model}",
-          switch_id=switch_id,
-          state="running",
-          state_text=f"Rollback: {from_model} restaurado",
-        )
-
-        update_switch_state(
-          switch_id,
-          current_step="rollback_litellm",
-          state_text="Rollback: iniciando LiteLLM",
-          state="running",
-        )
-        container_start(LITELLM_CONTAINER)
-        rollback_litellm_model = MODELS[from_model]["litellm_model"]
-        wait_litellm_model(rollback_litellm_model, LITELLM_VERIFY_TIMEOUT_SECONDS)
-        add_step(
-          steps,
-          "rollback_litellm",
-          True,
-          "litellm restored",
-          switch_id=switch_id,
-          state="running",
-          state_text="Rollback completado",
-        )
-        set_active_mode(MODE_LLM)
-        clear_comfy_lease()
-
-        final_status = "rolled_back"
-      except Exception as rollback_exc:
-        rollback_error = str(rollback_exc)
-        add_step(
-          steps,
-          "rollback_error",
-          False,
-          rollback_error,
-          switch_id=switch_id,
-          state="failed",
-          state_text="Error durante rollback",
-          ready=False,
-          error=rollback_error,
-        )
-        error_detail = f"{error_detail}; rollback failed: {rollback_error}"
-
-    elif disruptive_started:
-      try:
-        update_switch_state(
-          switch_id,
-          current_step="restore_config",
-          state_text="Restaurando configuracion activa",
-          state="running",
-        )
-        restore_active_files(previous_config, previous_model_value)
-        add_step(
-          steps,
-          "restore_config",
-          True,
-          "active config restored",
-          switch_id=switch_id,
-          state="running",
-          state_text="Configuracion activa restaurada",
-        )
-      except Exception as restore_exc:
-        add_step(
-          steps,
-          "restore_config",
-          False,
-          str(restore_exc),
-          switch_id=switch_id,
-          state="running",
-          state_text="Error restaurando configuracion",
-          error=str(restore_exc),
-        )
-      try:
-        update_switch_state(
-          switch_id,
-          current_step="restore_litellm",
-          state_text="Reiniciando LiteLLM",
-          state="running",
-        )
-        container_start(LITELLM_CONTAINER)
-        add_step(
-          steps,
-          "restore_litellm",
-          True,
-          "litellm restarted",
-          switch_id=switch_id,
-          state="running",
-          state_text="LiteLLM reiniciado",
-        )
-        set_active_mode(MODE_LLM)
-        clear_comfy_lease()
-      except Exception as litellm_exc:
-        add_step(
-          steps,
-          "restore_litellm",
-          False,
-          str(litellm_exc),
-          switch_id=switch_id,
-          state="failed",
-          state_text="Error al reiniciar LiteLLM",
-          error=str(litellm_exc),
-        )
-
-    set_runtime_state(last_error=error_detail)
-
-    final_text = "Rollback completado; modelo objetivo no disponible"
-    if final_status == "failed":
-      final_text = "Error en cambio de modelo"
-
-    update_switch_state(
-      switch_id,
-      state=final_status,
-      from_model=from_model,
-      to_model=model,
-      current_step="complete",
-      state_text=final_text,
-      ready=False,
-      error=error_detail,
-      steps=steps,
-    )
-    return switch_response(
-      switch_id=switch_id,
-      status=final_status,
-      from_model=from_model,
-      to_model=model,
-      steps=steps,
-      started=started,
-      error=error_detail,
-    )
-
-
-def run_switch_pipeline_async(model: str, switch_id: int) -> None:
-  try:
-    run_switch_pipeline(model, switch_id, raise_http_errors=False)
-  except Exception as exc:  # pragma: no cover - guardrail
-    error_detail = f"unexpected async switch error: {exc}"
-    set_runtime_state(last_error=error_detail)
-    update_switch_state(
-      switch_id,
-      state="failed",
-      current_step="switch_error",
-      state_text="Error inesperado en switch async",
-      ready=False,
-      error=error_detail,
-    )
-  finally:
-    SWITCH_LOCK.release()
-
-
-def default_llm_model() -> str:
-  if DEFAULT_MODEL in MODELS:
-    return DEFAULT_MODEL
-  return next(iter(MODELS.keys()))
-
-
-def resolve_llm_model(requested_model: Optional[str]) -> str:
-  if requested_model is not None:
-    candidate = requested_model.strip()
-    if candidate not in MODELS:
-      raise HTTPException(status_code=400, detail="unknown model")
-    return candidate
-  current = active_model()
-  if current and current in MODELS:
-    return current
-  return default_llm_model()
-
-
-def run_mode_switch_pipeline(
-  req: ModeSwitchRequest,
-  switch_id: int,
-  *,
-  raise_http_errors: bool,
-  source: str = "api",
-) -> Dict[str, Any]:
-  mode = req.mode.strip().lower()
-  if mode not in VALID_MODES:
-    raise HTTPException(status_code=400, detail="unknown mode")
-
-  if mode == MODE_LLM:
-    if req.ttl_minutes is not None:
-      raise HTTPException(status_code=400, detail="ttl_minutes is only valid for mode='comfy'")
-    target_model = resolve_llm_model(req.model)
-    update_switch_state(
-      switch_id,
-      state_text=f"Cambiando a modo llm ({target_model})",
-      to_model=target_model,
-      current_step="mode_llm",
-    )
-    return run_switch_pipeline(target_model, switch_id, raise_http_errors=raise_http_errors)
-
-  if req.model is not None and req.model.strip():
-    raise HTTPException(status_code=400, detail="model is only valid for mode='llm'")
-
-  ttl_minutes = normalize_comfy_ttl(req.ttl_minutes)
-  started = time.monotonic()
-  steps: List[Dict[str, Any]] = []
-
-  before = status_payload()
-  running_before = running_models_from_status(before)
-  from_model = running_before[0] if running_before else before.get("active_model")
-  litellm_before = before.get("litellm", {})
-  litellm_running_before = snapshot_is_running(litellm_before)
-  disruptive_started = False
-
-  update_switch_state(
-    switch_id,
-    state="running",
-    from_model=from_model,
-    to_model=f"mode:{MODE_COMFY}",
-    current_step="preflight",
-    state_text=f"Iniciando modo comfy ({source})",
-    ready=False,
-    error=None,
-    steps=steps,
-  )
-
-  try:
-    ensure_container_exists(COMFY_CONTAINER, "prod-bootstrap-models")
-    add_step(
-      steps,
-      "preflight",
-      True,
-      f"target container exists: {COMFY_CONTAINER}",
-      switch_id=switch_id,
-      state="running",
-      state_text=f"Preflight OK para {COMFY_CONTAINER}",
-    )
-
-    comfy_state = before.get("comfyui", {})
-    comfy_running = isinstance(comfy_state, dict) and comfy_state.get("status") == "running"
-    if active_mode() == MODE_COMFY and comfy_running and len(running_before) == 0 and not litellm_running_before:
-      lease_until = set_comfy_lease(ttl_minutes)
-      set_active_mode(MODE_COMFY)
-      add_step(
-        steps,
-        "renew_lease",
-        True,
-        f"comfy lease renewed until {lease_until.isoformat()}",
-        switch_id=switch_id,
-        state="success",
-        state_text="Lease de ComfyUI renovado",
-        ready=True,
-        error=None,
-      )
-      set_runtime_state(clear_error=True)
-      update_switch_state(
-        switch_id,
-        state="success",
-        from_model=from_model,
-        to_model=f"mode:{MODE_COMFY}",
-        current_step="complete",
-        state_text="ComfyUI disponible",
-        ready=True,
-        error=None,
-        steps=steps,
-      )
-      return switch_response(
-        switch_id=switch_id,
-        status="success",
-        from_model=from_model,
-        to_model=f"mode:{MODE_COMFY}",
-        steps=steps,
-        started=started,
-        error=None,
-      )
-
-    update_switch_state(
-      switch_id,
-      current_step="stop_litellm",
-      state_text="Deteniendo LiteLLM",
-      state="running",
-    )
-    container_stop(LITELLM_CONTAINER)
-    disruptive_started = True
-    add_step(
-      steps,
-      "stop_litellm",
-      True,
-      "litellm stopped",
-      switch_id=switch_id,
-      state="running",
-      state_text="LiteLLM detenido",
-    )
-
-    update_switch_state(
-      switch_id,
-      current_step="stop_models",
-      state_text="Deteniendo contenedores de modelo",
-      state="running",
-    )
-    stop_all_model_containers()
-    add_step(
-      steps,
-      "stop_models",
-      True,
-      "all vllm containers stopped",
-      switch_id=switch_id,
-      state="running",
-      state_text="Contenedores de modelo detenidos",
-    )
-
-    update_switch_state(
-      switch_id,
-      current_step="start_comfy",
-      state_text=f"Iniciando {COMFY_CONTAINER}",
-      state="running",
-    )
-    container_start(COMFY_CONTAINER)
-    add_step(
-      steps,
-      "start_comfy",
-      True,
-      f"started {COMFY_CONTAINER}",
-      switch_id=switch_id,
-      state="running",
-      state_text=f"{COMFY_CONTAINER} iniciado",
-    )
-
-    update_switch_state(
-      switch_id,
-      current_step="wait_comfy",
-      state_text=f"Esperando health de {COMFY_CONTAINER}",
-      state="running",
-    )
-    wait_container_ready(COMFY_CONTAINER, HEALTH_TIMEOUT_SECONDS)
-    add_step(
-      steps,
-      "wait_comfy",
-      True,
-      f"{COMFY_CONTAINER} is ready",
-      switch_id=switch_id,
-      state="running",
-      state_text=f"{COMFY_CONTAINER} listo",
-    )
-
-    set_active_mode(MODE_COMFY)
-    lease_until = set_comfy_lease(ttl_minutes)
-    add_step(
-      steps,
-      "activate_mode",
-      True,
-      f"active mode set to comfy until {lease_until.isoformat()}",
-      switch_id=switch_id,
-      state="success",
-      state_text=f"ComfyUI activo ({ttl_minutes} min)",
-      ready=True,
-      error=None,
-    )
-
-    set_runtime_state(clear_error=True)
-    update_switch_state(
-      switch_id,
-      state="success",
-      from_model=from_model,
-      to_model=f"mode:{MODE_COMFY}",
-      current_step="complete",
-      state_text=f"ComfyUI activo ({ttl_minutes} min)",
-      ready=True,
-      error=None,
-      steps=steps,
-    )
-    return switch_response(
-      switch_id=switch_id,
-      status="success",
-      from_model=from_model,
-      to_model=f"mode:{MODE_COMFY}",
-      steps=steps,
-      started=started,
-      error=None,
-    )
-
-  except HTTPException as exc:
-    if raise_http_errors:
-      update_switch_state(
-        switch_id,
-        state="failed",
-        from_model=from_model,
-        to_model=f"mode:{MODE_COMFY}",
-        current_step="switch_error",
-        state_text=f"Error: {exc.detail}",
-        ready=False,
-        error=str(exc.detail),
-        steps=steps,
-      )
-      raise
-
-    error_detail = str(exc.detail)
-    add_step(
-      steps,
-      "switch_error",
-      False,
-      error_detail,
-      switch_id=switch_id,
-      state="failed",
-      state_text="Error en cambio de modo",
-      ready=False,
-      error=error_detail,
-    )
-    set_runtime_state(last_error=error_detail)
-    update_switch_state(
-      switch_id,
-      state="failed",
-      from_model=from_model,
-      to_model=f"mode:{MODE_COMFY}",
-      current_step="complete",
-      state_text="Error en cambio de modo",
-      ready=False,
-      error=error_detail,
-      steps=steps,
-    )
-    return switch_response(
-      switch_id=switch_id,
-      status="failed",
-      from_model=from_model,
-      to_model=f"mode:{MODE_COMFY}",
-      steps=steps,
-      started=started,
-      error=error_detail,
-    )
-
-  except Exception as exc:
-    error_detail = str(exc)
-    add_step(
-      steps,
-      "switch_error",
-      False,
-      error_detail,
-      switch_id=switch_id,
-      state="running",
-      state_text="Error detectado, iniciando rollback",
-      ready=False,
-      error=error_detail,
-    )
-
-    final_status = "failed"
-
-    if disruptive_started:
-      rollback_model = from_model if from_model in MODELS else default_llm_model()
-      try:
-        update_switch_state(
-          switch_id,
-          current_step="rollback_stop_comfy",
-          state_text="Rollback: deteniendo ComfyUI",
-          state="running",
-        )
-        container_stop(COMFY_CONTAINER)
-        add_step(
-          steps,
-          "rollback_stop_comfy",
-          True,
-          "comfyui stopped",
-          switch_id=switch_id,
-          state="running",
-          state_text="Rollback: ComfyUI detenido",
-        )
-
-        update_switch_state(
-          switch_id,
-          current_step="rollback_stop_models",
-          state_text="Rollback: deteniendo modelos",
-          state="running",
-        )
-        stop_all_model_containers()
-        add_step(
-          steps,
-          "rollback_stop_models",
-          True,
-          "all vllm containers stopped",
-          switch_id=switch_id,
-          state="running",
-          state_text="Rollback: modelos detenidos",
-        )
-
-        rollback_container = MODELS[rollback_model]["container"]
-        if container_json(rollback_container) is None:
-          raise RuntimeError(f"rollback container missing: {rollback_container}")
-
-        update_switch_state(
-          switch_id,
-          current_step="rollback_start_previous",
-          state_text=f"Rollback: iniciando {rollback_container}",
-          state="running",
-        )
-        container_start(rollback_container)
-        wait_container_ready(rollback_container, HEALTH_TIMEOUT_SECONDS)
-        add_step(
-          steps,
-          "rollback_start_previous",
-          True,
-          f"restored {rollback_model}",
-          switch_id=switch_id,
-          state="running",
-          state_text=f"Rollback: {rollback_model} restaurado",
-        )
-
-        ensure_active_config(rollback_model)
-        add_step(
-          steps,
-          "rollback_restore_config",
-          True,
-          f"active config set to {rollback_model}",
-          switch_id=switch_id,
-          state="running",
-          state_text="Rollback: configuracion restaurada",
-        )
-
-        update_switch_state(
-          switch_id,
-          current_step="rollback_litellm",
-          state_text="Rollback: iniciando LiteLLM",
-          state="running",
-        )
-        container_start(LITELLM_CONTAINER)
-        rollback_litellm_model = MODELS[rollback_model]["litellm_model"]
-        wait_litellm_model(rollback_litellm_model, LITELLM_VERIFY_TIMEOUT_SECONDS)
-        add_step(
-          steps,
-          "rollback_litellm",
-          True,
-          "litellm restored",
-          switch_id=switch_id,
-          state="running",
-          state_text="Rollback completado",
-        )
-        set_active_mode(MODE_LLM)
-        clear_comfy_lease()
-
-        final_status = "rolled_back"
-      except Exception as rollback_exc:
-        rollback_error = str(rollback_exc)
-        add_step(
-          steps,
-          "rollback_error",
-          False,
-          rollback_error,
-          switch_id=switch_id,
-          state="failed",
-          state_text="Error durante rollback",
-          ready=False,
-          error=rollback_error,
-        )
-        error_detail = f"{error_detail}; rollback failed: {rollback_error}"
-
-    set_runtime_state(last_error=error_detail)
-
-    final_text = "Rollback completado; modo comfy no disponible"
-    if final_status == "failed":
-      final_text = "Error en cambio de modo"
-
-    update_switch_state(
-      switch_id,
-      state=final_status,
-      from_model=from_model,
-      to_model=f"mode:{MODE_COMFY}",
-      current_step="complete",
-      state_text=final_text,
-      ready=False,
-      error=error_detail,
-      steps=steps,
-    )
-    return switch_response(
-      switch_id=switch_id,
-      status=final_status,
-      from_model=from_model,
-      to_model=f"mode:{MODE_COMFY}",
-      steps=steps,
-      started=started,
-      error=error_detail,
-    )
-
-
-def run_mode_switch_pipeline_async(req_payload: Dict[str, Any], switch_id: int) -> None:
-  try:
-    req = ModeSwitchRequest(**req_payload)
-    run_mode_switch_pipeline(req, switch_id, raise_http_errors=False)
-  except Exception as exc:  # pragma: no cover - guardrail
-    error_detail = f"unexpected async mode switch error: {exc}"
-    set_runtime_state(last_error=error_detail)
-    update_switch_state(
-      switch_id,
-      state="failed",
-      current_step="switch_error",
-      state_text="Error inesperado en cambio de modo async",
-      ready=False,
-      error=error_detail,
-    )
-  finally:
-    SWITCH_LOCK.release()
-
-
-def snapshot_is_running(snapshot: Any) -> bool:
-  return isinstance(snapshot, dict) and snapshot.get("status") == "running"
-
-
-def startup_reconcile_error_detail(message: str) -> str:
-  detail = message.strip()
-  if "target container is not created" in detail and "prod-bootstrap-models" in detail:
-    return detail
-  if "target container is not created" in detail:
-    return f"{detail}. Run make prod-bootstrap-models first."
-  if "container not found while waiting" in detail or "rollback container missing" in detail:
-    return f"{detail}. Run make prod-bootstrap-models first."
-  return detail
-
-
-def startup_reconcile_llm_blocking() -> Optional[int]:
-  configured_model = active_model()
-  target_model = configured_model if configured_model in MODELS else default_llm_model()
-
-  if configured_model != target_model:
-    ensure_active_config(target_model)
-
-  payload = status_payload()
-  running_models = running_models_from_status(payload)
-  litellm_running = snapshot_is_running(payload.get("litellm"))
-
-  if running_models == [target_model] and litellm_running:
-    return None
-
-  switch_id = create_switch_state(
-    to_model=target_model,
-    from_model=running_models[0] if running_models else payload.get("active_model"),
-    state="queued",
-    state_text=f"Reconciliando arranque en modo llm ({target_model})",
-    current_step="startup_reconcile",
-  )
-
-  result = run_mode_switch_pipeline(
-    ModeSwitchRequest(mode=MODE_LLM, model=target_model, wait_for_ready=True),
-    switch_id,
-    raise_http_errors=False,
-    source="startup_reconcile",
-  )
-  status = result.get("status")
-  if status != "success":
-    error_detail = startup_reconcile_error_detail(
-      str(result.get("error") or f"startup llm reconciliation finished with status={status}")
-    )
-    set_runtime_state(last_error=error_detail)
-    update_switch_state(
-      switch_id,
-      state_text="Reconciliacion de arranque en modo llm incompleta",
-      error=error_detail,
-      ready=False,
-    )
-  return switch_id
-
-
-def startup_reconcile_comfy_blocking() -> Optional[int]:
-  payload = status_payload()
-  running_models = running_models_from_status(payload)
-  litellm_running = snapshot_is_running(payload.get("litellm"))
-  comfy_running = snapshot_is_running(payload.get("comfyui"))
-
-  if comfy_running and not litellm_running and len(running_models) == 0:
-    return None
-
-  switch_id = create_switch_state(
-    to_model=f"mode:{MODE_COMFY}",
-    from_model=running_models[0] if running_models else payload.get("active_model"),
-    state="queued",
-    state_text="Reconciliando arranque en modo comfy",
-    current_step="startup_reconcile",
-  )
-
-  result = run_mode_switch_pipeline(
-    ModeSwitchRequest(mode=MODE_COMFY, wait_for_ready=True),
-    switch_id,
-    raise_http_errors=False,
-    source="startup_reconcile",
-  )
-  status = result.get("status")
-  if status != "success":
-    error_detail = startup_reconcile_error_detail(
-      str(result.get("error") or f"startup comfy reconciliation finished with status={status}")
-    )
-    set_runtime_state(last_error=error_detail)
-    update_switch_state(
-      switch_id,
-      state_text="Reconciliacion de arranque en modo comfy incompleta",
-      error=error_detail,
-      ready=False,
-    )
-  return switch_id
-
-
-def startup_reconcile_mode_blocking() -> None:
-  mode = active_mode()
-  if mode not in VALID_MODES:
-    mode = MODE_LLM
-
-  switch_id: Optional[int] = None
-  try:
-    if mode == MODE_COMFY:
-      switch_id = startup_reconcile_comfy_blocking()
-    else:
-      switch_id = startup_reconcile_llm_blocking()
-  except Exception as exc:
-    error_detail = startup_reconcile_error_detail(f"startup reconciliation failed: {exc}")
-    set_runtime_state(last_error=error_detail)
-    if switch_id is None:
-      fallback_target = f"mode:{MODE_COMFY}" if mode == MODE_COMFY else (active_model() or default_llm_model())
-      switch_id = create_switch_state(
-        to_model=fallback_target,
-        from_model=active_model(),
-        state="running",
-        state_text="Reconciliando estado tras arranque",
-        current_step="startup_reconcile",
-      )
-    update_switch_state(
-      switch_id,
-      state="failed",
-      current_step="complete",
-      state_text="Error en reconciliacion de arranque",
-      ready=False,
-      error=error_detail,
-    )
-
-
-def monitor_comfy_lease() -> None:
-  poll_seconds = max(MODE_MONITOR_POLL_SECONDS, 1)
-  while True:
-    time.sleep(poll_seconds)
-    if active_mode() != MODE_COMFY:
-      continue
-
-    lease = comfy_lease_status()
-    if not lease.get("expired"):
-      continue
-
-    if not SWITCH_LOCK.acquire(blocking=False):
-      continue
-
-    target_model = default_llm_model()
-    switch_id = create_switch_state(
-      to_model=target_model,
-      from_model=None,
-      state="queued",
-      state_text=f"Lease comfy expirado; devolviendo a {target_model}",
-      current_step="lease_expired",
-    )
-
-    try:
-      req = ModeSwitchRequest(mode=MODE_LLM, model=target_model, wait_for_ready=True)
-      run_mode_switch_pipeline(req, switch_id, raise_http_errors=False, source="lease_expired")
-    except Exception as exc:  # pragma: no cover - guardrail
-      error_detail = f"lease monitor recovery failed: {exc}"
-      set_runtime_state(last_error=error_detail)
-      update_switch_state(
-        switch_id,
-        state="failed",
-        current_step="lease_expired_error",
-        state_text="Error al recuperar modo llm tras expirar lease",
-        ready=False,
-        error=error_detail,
-      )
-    finally:
-      SWITCH_LOCK.release()
-
-
-@app.on_event("startup")
-def startup_init_mode() -> None:
-  global MODE_MONITOR_THREAD
-
-  os.makedirs(CONFIG_DIR, exist_ok=True)
-  os.makedirs(DYNAMIC_TEMPLATE_DIR, exist_ok=True)
-  reload_models_registry()
-  if read_optional_text(ACTIVE_MODE_FILE) is None:
-    set_active_mode(MODE_LLM)
-  elif active_mode() != MODE_COMFY:
-    set_active_mode(MODE_LLM)
-
-  if active_mode() != MODE_COMFY:
-    clear_comfy_lease()
-
-  startup_reconcile_mode_blocking()
-
-  with MODE_MONITOR_LOCK:
-    if MODE_MONITOR_THREAD is None or not MODE_MONITOR_THREAD.is_alive():
-      MODE_MONITOR_THREAD = threading.Thread(
-        target=monitor_comfy_lease,
-        name="comfy-lease-monitor",
-        daemon=True,
-      )
-      MODE_MONITOR_THREAD.start()
-
-
 @app.get("/health")
 def health() -> Dict[str, str]:
   return {"status": "ok"}
-
-
-@app.get("/admin", response_class=HTMLResponse)
-def admin() -> HTMLResponse:
-  model_options_html = "\n".join(
-    [f'          <option value="{model_id}">{model_id}</option>' for model_id in sorted(MODELS.keys())]
-  )
-  return HTMLResponse(
-    content="""<!doctype html>
-<html lang="es">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Model Switcher Admin</title>
-  <style>
-    :root {
-      --bg: #10151e;
-      --panel: #171f2d;
-      --panel-alt: #1f293b;
-      --text: #edf2f7;
-      --muted: #94a3b8;
-      --ok: #16a34a;
-      --warn: #eab308;
-      --danger: #dc2626;
-      --accent: #0ea5e9;
-      --border: #334155;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: linear-gradient(160deg, var(--bg), #0b111a);
-      color: var(--text);
-      min-height: 100vh;
-      padding: 24px;
-    }
-    .layout {
-      max-width: 980px;
-      margin: 0 auto;
-      display: grid;
-      gap: 16px;
-    }
-    .card {
-      background: linear-gradient(180deg, var(--panel), var(--panel-alt));
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 16px;
-    }
-    h1 {
-      margin: 0 0 8px;
-      font-size: 20px;
-    }
-    .hint {
-      color: var(--muted);
-      margin: 0;
-      font-size: 14px;
-    }
-    .row {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 12px;
-      align-items: center;
-    }
-    input, select, button {
-      border-radius: 8px;
-      border: 1px solid var(--border);
-      background: #0f172a;
-      color: var(--text);
-      padding: 9px 10px;
-      font-size: 14px;
-    }
-    input, select { min-width: 160px; }
-    button {
-      cursor: pointer;
-      background: #0f172a;
-    }
-    button.primary { border-color: var(--accent); }
-    button.warn { border-color: var(--warn); }
-    button.danger { border-color: var(--danger); }
-    pre {
-      background: #0b1220;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px;
-      font-size: 12px;
-      overflow: auto;
-      white-space: pre-wrap;
-      margin: 0;
-    }
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      padding: 6px 10px;
-      font-size: 12px;
-      color: var(--muted);
-    }
-    .dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      display: inline-block;
-      background: var(--warn);
-    }
-    .dot.ok { background: var(--ok); }
-    .dot.danger { background: var(--danger); }
-  </style>
-</head>
-<body>
-  <main class="layout">
-    <section class="card">
-      <h1>Model Switcher Admin</h1>
-      <p class="hint">Canal de control always-on para cambiar entre modo LLM y ComfyUI.</p>
-      <div class="row">
-        <label for="token">Bearer token:</label>
-        <input id="token" type="password" placeholder="MODEL_SWITCHER_TOKEN">
-        <button id="saveToken">Guardar token</button>
-        <span class="badge"><span id="statusDot" class="dot"></span><span id="statusText">sin estado</span></span>
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="row">
-        <button id="refresh">Refrescar estado</button>
-        <button id="modeComfy" class="warn">Activar Comfy (45m)</button>
-        <select id="llmModel">
-__MODEL_OPTIONS__
-        </select>
-        <button id="modeLlm" class="primary">Volver a LLM</button>
-        <button id="release" class="danger">Preemption LLM</button>
-      </div>
-      <p class="hint">`Preemption LLM` fuerza la salida de comfy y restaura el modo llm por prioridad operativa.</p>
-    </section>
-
-    <section class="card">
-      <div class="row">
-        <input id="hfUrl" type="text" placeholder="https://huggingface.co/org/repo">
-        <input id="hfModelId" type="text" placeholder="model-id (opcional)">
-        <input id="hfTokenizer" type="text" placeholder="tokenizer (opcional)">
-        <input id="hfRevision" type="text" placeholder="revision (opcional)">
-        <label style="font-size:13px;display:inline-flex;gap:6px;align-items:center;">
-          <input id="hfTrustRemoteCode" type="checkbox"> trust_remote_code
-        </label>
-        <button id="registerModel" class="primary">Registrar modelo HF</button>
-      </div>
-      <p class="hint">Crea template LiteLLM, registra modelo dinámico y prepara su contenedor vLLM.</p>
-    </section>
-
-    <section class="card">
-      <pre id="output">Cargando...</pre>
-    </section>
-  </main>
-
-  <script>
-    const tokenInput = document.getElementById("token");
-    const outputEl = document.getElementById("output");
-    const statusText = document.getElementById("statusText");
-    const statusDot = document.getElementById("statusDot");
-
-    const LS_KEY = "model_switcher_token";
-    tokenInput.value = window.localStorage.getItem(LS_KEY) || "";
-
-    function setStatus(mode, healthy) {
-      statusText.textContent = mode ? `modo=${mode}` : "sin estado";
-      statusDot.className = "dot";
-      if (healthy === true) statusDot.classList.add("ok");
-      if (healthy === false) statusDot.classList.add("danger");
-    }
-
-    function getHeaders() {
-      const token = tokenInput.value.trim();
-      if (!token) throw new Error("Token requerido");
-      return {
-        "Authorization": `Bearer ${token}`,
-        "Content-Type": "application/json",
-      };
-    }
-
-    async function api(method, path, body) {
-      const headers = getHeaders();
-      const response = await fetch(path, {
-        method,
-        headers,
-        body: body ? JSON.stringify(body) : undefined,
-      });
-      const text = await response.text();
-      let data = {};
-      try { data = text ? JSON.parse(text) : {}; } catch (_) { data = { raw: text }; }
-      if (!response.ok) {
-        throw new Error(`${response.status} ${response.statusText}\\n${JSON.stringify(data, null, 2)}`);
-      }
-      return data;
-    }
-
-    async function refresh() {
-      try {
-        const modePayload = await api("GET", "/mode");
-        const activeMode = modePayload?.mode?.active || "unknown";
-        const healthy = modePayload?.switch_in_progress ? null : true;
-        setStatus(activeMode, healthy);
-        outputEl.textContent = JSON.stringify(modePayload, null, 2);
-      } catch (err) {
-        setStatus(null, false);
-        outputEl.textContent = String(err);
-      }
-    }
-
-    async function switchComfy() {
-      const payload = await api("POST", "/mode/switch", { mode: "comfy", ttl_minutes: 45, wait_for_ready: true });
-      outputEl.textContent = JSON.stringify(payload, null, 2);
-      await refresh();
-    }
-
-    async function switchLlm() {
-      const model = document.getElementById("llmModel").value;
-      const payload = await api("POST", "/mode/switch", { mode: "llm", model, wait_for_ready: true });
-      outputEl.textContent = JSON.stringify(payload, null, 2);
-      await refresh();
-    }
-
-    async function releaseLlm() {
-      const payload = await api("POST", "/mode/release", {});
-      outputEl.textContent = JSON.stringify(payload, null, 2);
-      await refresh();
-    }
-
-    async function registerModelFromHF() {
-      const huggingface_url = document.getElementById("hfUrl").value.trim();
-      const model_id_raw = document.getElementById("hfModelId").value.trim();
-      const tokenizer_raw = document.getElementById("hfTokenizer").value.trim();
-      const revision_raw = document.getElementById("hfRevision").value.trim();
-      const trust_remote_code = document.getElementById("hfTrustRemoteCode").checked;
-      if (!huggingface_url) {
-        throw new Error("URL de Hugging Face requerida");
-      }
-      const body = { huggingface_url };
-      if (model_id_raw) body.model_id = model_id_raw;
-      if (tokenizer_raw) body.tokenizer = tokenizer_raw;
-      if (revision_raw) body.revision = revision_raw;
-      if (trust_remote_code) body.trust_remote_code = true;
-      const payload = await api("POST", "/models/register", body);
-      outputEl.textContent = JSON.stringify(payload, null, 2);
-      window.location.reload();
-    }
-
-    document.getElementById("saveToken").addEventListener("click", () => {
-      window.localStorage.setItem(LS_KEY, tokenInput.value.trim());
-      refresh();
-    });
-    document.getElementById("refresh").addEventListener("click", () => refresh());
-    document.getElementById("modeComfy").addEventListener("click", () => switchComfy().catch((e) => { outputEl.textContent = String(e); }));
-    document.getElementById("modeLlm").addEventListener("click", () => switchLlm().catch((e) => { outputEl.textContent = String(e); }));
-    document.getElementById("release").addEventListener("click", () => releaseLlm().catch((e) => { outputEl.textContent = String(e); }));
-    document.getElementById("registerModel").addEventListener("click", () => registerModelFromHF().catch((e) => { outputEl.textContent = String(e); }));
-
-    refresh();
-    setInterval(refresh, 5000);
-  </script>
-</body>
-</html>""".replace("__MODEL_OPTIONS__", model_options_html)
-  )
 
 
 @app.get("/healthz/ready")
@@ -2583,8 +374,6 @@ def ready() -> Dict[str, str]:
   running = running_models_from_status(payload)
   active = payload.get("active_model")
 
-  if payload.get("active_mode") != MODE_LLM:
-    raise HTTPException(status_code=503, detail="llm mode is not active")
   if len(running) != 1:
     raise HTTPException(status_code=503, detail="expected exactly one running model")
   if not active:
@@ -2599,84 +388,15 @@ def ready() -> Dict[str, str]:
 def models() -> Dict[str, Any]:
   return {
     "models": [
-      model_public_payload(model_id, meta)
+      {
+        "id": model_id,
+        "container": meta["container"],
+        "template": meta["template"],
+        "litellm_model": meta["litellm_model"],
+      }
       for model_id, meta in MODELS.items()
     ]
   }
-
-
-@app.post("/models/register", dependencies=[Depends(require_token)])
-def register_huggingface_model(req: RegisterHuggingFaceModelRequest) -> Dict[str, Any]:
-  model_meta = build_dynamic_model(req)
-  model_id = str(model_meta["id"])
-
-  os.makedirs(DYNAMIC_TEMPLATE_DIR, exist_ok=True)
-  template_path = os.path.join(DYNAMIC_TEMPLATE_DIR, str(model_meta["template"]))
-  template_content = render_litellm_template(
-    litellm_model=str(model_meta["litellm_model"]),
-    hf_repo=str(model_meta["hf_repo"]),
-    container_name=str(model_meta["container"]),
-  )
-  write_text(template_path, template_content)
-
-  global MODELS
-  previous_models = MODELS
-  try:
-    persist_dynamic_model(model_id, model_meta)
-    updated_models = dict(MODELS)
-    updated_models[model_id] = model_meta
-    MODELS = updated_models
-    ensure_model_container_created(model_id)
-  except Exception as exc:
-    try:
-      remove_dynamic_model_from_registry(model_id)
-    except Exception:
-      pass
-    MODELS = previous_models
-    remove_file(template_path)
-    raise HTTPException(status_code=500, detail=f"failed to register model: {exc}") from exc
-
-  return {
-    "status": "created",
-    "model": model_public_payload(model_id, model_meta),
-    "next": {
-      "switch_endpoint": "/switch",
-      "payload": {"model": model_id, "wait_for_ready": True},
-    },
-  }
-
-
-@app.delete("/models/{model_id}", dependencies=[Depends(require_token)])
-def unregister_model(model_id: str) -> Dict[str, Any]:
-  try:
-    normalized = normalize_model_id(model_id)
-  except ValueError as exc:
-    raise HTTPException(status_code=400, detail=str(exc)) from exc
-  model_meta = MODELS.get(normalized)
-  if model_meta is None:
-    raise HTTPException(status_code=404, detail="model not found")
-  if not model_meta.get("dynamic"):
-    raise HTTPException(status_code=400, detail="built-in models cannot be removed")
-
-  current = active_model()
-  if current == normalized:
-    raise HTTPException(status_code=409, detail="cannot remove active model; switch first")
-
-  container_name = str(model_meta["container"])
-  template_path = model_template_path(model_meta)
-
-  container_stop(container_name)
-  resp = docker_request("DELETE", f"/containers/{quote(container_name, safe='')}?force=true")
-  if resp.status_code not in {204, 404}:
-    raise HTTPException(status_code=500, detail=f"failed to delete container: {resp.text}")
-
-  remove_file(template_path)
-  removed = remove_dynamic_model_from_registry(normalized)
-  if not removed:
-    raise HTTPException(status_code=500, detail="registry update failed")
-
-  reload_models_registry()
-  return {"status": "deleted", "model_id": normalized}
 
 
 @app.get("/status", dependencies=[Depends(require_token)])
@@ -2684,184 +404,148 @@ def status() -> Dict[str, Any]:
   return status_payload()
 
 
-@app.get("/mode", dependencies=[Depends(require_token)])
-def mode_status() -> Dict[str, Any]:
-  payload = status_payload()
-  return {
-    "mode": payload.get("mode"),
-    "running_models": payload.get("running_models"),
-    "litellm": payload.get("litellm"),
-    "comfyui": payload.get("comfyui"),
-    "switch_in_progress": payload.get("switch_in_progress"),
-    "switch": payload.get("switch"),
-  }
-
-
-@app.post("/mode/switch", dependencies=[Depends(require_token)])
-def mode_switch(req: ModeSwitchRequest) -> Any:
-  mode = req.mode.strip().lower()
-  if mode not in VALID_MODES:
-    raise HTTPException(status_code=400, detail="unknown mode")
-
-  target_model: Optional[str] = None
-  if mode == MODE_LLM:
-    if req.ttl_minutes is not None:
-      raise HTTPException(status_code=400, detail="ttl_minutes is only valid for mode='comfy'")
-    target_model = resolve_llm_model(req.model)
-  else:
-    if req.model is not None and req.model.strip():
-      raise HTTPException(status_code=400, detail="model is only valid for mode='llm'")
-    normalize_comfy_ttl(req.ttl_minutes)
-
-  to_model = target_model if target_model is not None else f"mode:{mode}"
-
-  if req.wait_for_ready:
-    if not SWITCH_LOCK.acquire(blocking=False):
-      raise HTTPException(status_code=409, detail="switch_in_progress")
-
-    switch_id = create_switch_state(
-      to_model=to_model,
-      from_model=None,
-      state="running",
-      state_text=f"Iniciando cambio de modo a {mode}",
-      current_step="accepted",
-    )
-
-    try:
-      return run_mode_switch_pipeline(req, switch_id, raise_http_errors=True)
-    finally:
-      SWITCH_LOCK.release()
-
-  if not SWITCH_LOCK.acquire(blocking=False):
-    current = current_switch_snapshot()
-    in_progress_id = current.get("id") if current else None
-    in_progress_model = current.get("to_model") if current else to_model
-    in_progress_text = current.get("state_text") if current else "Cambio de modo en curso"
-    return JSONResponse(
-      status_code=202,
-      content={
-        "status": "in_progress",
-        "switch_id": in_progress_id,
-        "to_model": in_progress_model,
-        "state_text": in_progress_text,
-        "poll_endpoint": "/status",
-      },
-    )
-
-  switch_id = create_switch_state(
-    to_model=to_model,
-    from_model=None,
-    state="queued",
-    state_text=f"Cambio de modo aceptado a {mode}",
-    current_step="queued",
-  )
-
-  worker = threading.Thread(
-    target=run_mode_switch_pipeline_async,
-    args=(req.dict(), switch_id),
-    daemon=True,
-  )
-  worker.start()
-
-  return JSONResponse(
-    status_code=202,
-    content={
-      "status": "accepted",
-      "switch_id": switch_id,
-      "to_model": to_model,
-      "state_text": f"Cambio de modo aceptado a {mode}",
-      "poll_endpoint": "/status",
-    },
-  )
-
-
-@app.post("/mode/release", dependencies=[Depends(require_token)])
-def mode_release() -> Dict[str, Any]:
-  if not SWITCH_LOCK.acquire(blocking=False):
-    raise HTTPException(status_code=409, detail="switch_in_progress")
-
-  target_model = default_llm_model()
-  switch_id = create_switch_state(
-    to_model=target_model,
-    from_model=None,
-    state="running",
-    state_text=f"Preemption a modo llm ({target_model})",
-    current_step="accepted",
-  )
-
-  try:
-    req = ModeSwitchRequest(mode=MODE_LLM, model=target_model, wait_for_ready=True)
-    return run_mode_switch_pipeline(req, switch_id, raise_http_errors=True, source="manual_release")
-  finally:
-    SWITCH_LOCK.release()
-
-
 @app.post("/switch", dependencies=[Depends(require_token)])
-def switch(req: SwitchRequest) -> Any:
+def switch(req: SwitchRequest) -> Dict[str, Any]:
   model = req.model.strip()
   if model not in MODELS:
     raise HTTPException(status_code=400, detail="unknown model")
 
-  if req.wait_for_ready:
-    if not SWITCH_LOCK.acquire(blocking=False):
-      raise HTTPException(status_code=409, detail="switch_in_progress")
-
-    switch_id = create_switch_state(
-      to_model=model,
-      from_model=None,
-      state="running",
-      state_text=f"Iniciando cambio a {model}",
-      current_step="accepted",
-    )
-
-    try:
-      return run_switch_pipeline(model, switch_id, raise_http_errors=True)
-    finally:
-      SWITCH_LOCK.release()
-
   if not SWITCH_LOCK.acquire(blocking=False):
-    current = current_switch_snapshot()
-    in_progress_id = current.get("id") if current else None
-    in_progress_model = current.get("to_model") if current else model
-    in_progress_text = current.get("state_text") if current else "Cambio de modelo en curso"
-    return JSONResponse(
-      status_code=202,
-      content={
-        "status": "in_progress",
-        "switch_id": in_progress_id,
-        "to_model": in_progress_model,
-        "state_text": in_progress_text,
-        "poll_endpoint": "/status",
-      },
+    raise HTTPException(status_code=409, detail="switch_in_progress")
+
+  started = time.monotonic()
+  steps: List[Dict[str, Any]] = []
+
+  previous_config = read_optional_text(ACTIVE_CONFIG)
+  previous_model_value = read_optional_text(ACTIVE_MODEL_FILE)
+
+  before = status_payload()
+  running_before = running_models_from_status(before)
+  from_model = running_before[0] if running_before else before.get("active_model")
+  disruptive_started = False
+
+  try:
+    target_container = MODELS[model]["container"]
+    if container_json(target_container) is None:
+      raise HTTPException(
+        status_code=412,
+        detail=(
+          f"target container is not created: {target_container}. "
+          "Run make prod-bootstrap-models first."
+        ),
+      )
+    add_step(steps, "preflight", True, f"target container exists: {target_container}")
+
+    if from_model == model and len(running_before) == 1:
+      add_step(steps, "noop", True, f"model '{model}' is already active")
+      set_runtime_state(clear_error=True)
+      return switch_response(
+        status="success",
+        from_model=from_model,
+        to_model=model,
+        steps=steps,
+        started=started,
+        error=None,
+      )
+
+    container_stop(LITELLM_CONTAINER)
+    disruptive_started = True
+    add_step(steps, "stop_litellm", True, "litellm stopped")
+
+    for meta in MODELS.values():
+      container_stop(meta["container"])
+    add_step(steps, "stop_models", True, "all vllm containers stopped")
+
+    container_start(target_container)
+    add_step(steps, "start_target", True, f"started {target_container}")
+
+    wait_container_ready(target_container, HEALTH_TIMEOUT_SECONDS)
+    add_step(steps, "wait_target", True, f"{target_container} is ready")
+
+    ensure_active_config(model)
+    add_step(steps, "activate_config", True, f"active config set to {model}")
+
+    container_start(LITELLM_CONTAINER)
+    add_step(steps, "start_litellm", True, "litellm started")
+
+    litellm_model_name = MODELS[model]["litellm_model"]
+    wait_litellm_model(litellm_model_name, LITELLM_VERIFY_TIMEOUT_SECONDS)
+    add_step(steps, "verify_litellm", True, f"litellm exposes model '{litellm_model_name}'")
+
+    set_runtime_state(clear_error=True)
+    return switch_response(
+      status="success",
+      from_model=from_model,
+      to_model=model,
+      steps=steps,
+      started=started,
+      error=None,
     )
 
-  switch_id = create_switch_state(
-    to_model=model,
-    from_model=None,
-    state="queued",
-    state_text=f"Cambio aceptado a {model}",
-    current_step="queued",
-  )
+  except HTTPException:
+    raise
 
-  worker = threading.Thread(target=run_switch_pipeline_async, args=(model, switch_id), daemon=True)
-  worker.start()
+  except Exception as exc:
+    error_detail = str(exc)
+    add_step(steps, "switch_error", False, error_detail)
 
-  return JSONResponse(
-    status_code=202,
-    content={
-      "status": "accepted",
-      "switch_id": switch_id,
-      "to_model": model,
-      "state_text": f"Cambio aceptado a {model}",
-      "poll_endpoint": "/status",
-    },
-  )
+    final_status = "failed"
+
+    if disruptive_started and from_model and from_model in MODELS and from_model != model:
+      try:
+        restore_active_files(previous_config, previous_model_value)
+        add_step(steps, "rollback_restore_config", True, "active config restored")
+
+        for meta in MODELS.values():
+          container_stop(meta["container"])
+        add_step(steps, "rollback_stop_models", True, "all vllm containers stopped")
+
+        rollback_container = MODELS[from_model]["container"]
+        if container_json(rollback_container) is None:
+          raise RuntimeError(f"rollback container missing: {rollback_container}")
+
+        container_start(rollback_container)
+        wait_container_ready(rollback_container, HEALTH_TIMEOUT_SECONDS)
+        add_step(steps, "rollback_start_previous", True, f"restored {from_model}")
+
+        container_start(LITELLM_CONTAINER)
+        rollback_litellm_model = MODELS[from_model]["litellm_model"]
+        wait_litellm_model(rollback_litellm_model, LITELLM_VERIFY_TIMEOUT_SECONDS)
+        add_step(steps, "rollback_litellm", True, "litellm restored")
+
+        final_status = "rolled_back"
+      except Exception as rollback_exc:
+        rollback_error = str(rollback_exc)
+        add_step(steps, "rollback_error", False, rollback_error)
+        error_detail = f"{error_detail}; rollback failed: {rollback_error}"
+    elif disruptive_started:
+      try:
+        restore_active_files(previous_config, previous_model_value)
+        add_step(steps, "restore_config", True, "active config restored")
+      except Exception as restore_exc:
+        add_step(steps, "restore_config", False, str(restore_exc))
+      try:
+        container_start(LITELLM_CONTAINER)
+        add_step(steps, "restore_litellm", True, "litellm restarted")
+      except Exception as litellm_exc:
+        add_step(steps, "restore_litellm", False, str(litellm_exc))
+
+    set_runtime_state(last_error=error_detail)
+    return switch_response(
+      status=final_status,
+      from_model=from_model,
+      to_model=model,
+      steps=steps,
+      started=started,
+      error=error_detail,
+    )
+
+  finally:
+    SWITCH_LOCK.release()
 
 
 @app.post("/stop", dependencies=[Depends(require_token)])
 def stop() -> Dict[str, Any]:
-  stop_all_model_containers()
-  container_stop(COMFY_CONTAINER)
-  set_active_mode(MODE_LLM)
-  clear_comfy_lease()
+  for meta in MODELS.values():
+    container_stop(meta["container"])
   return status_payload()
