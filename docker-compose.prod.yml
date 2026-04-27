@@ -341,6 +341,7 @@ services:
       - WEBUI_DB_PATH=/webui-data/webui.db
       - LITELLM_URL=http://litellm:4000
       - LITELLM_KEY=${LITELLM_KEY:-}
+      - MATXA_ADAPTER_URL=http://matxa-adapter:8002
     volumes:
       - /opt/ai/openwebui-data:/webui-data:ro
     networks:

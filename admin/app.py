@@ -32,6 +32,7 @@ DOCKER_PROXY_URL = os.environ.get("DOCKER_PROXY_URL", "http://docker-socket-prox
 COMFYUI_INTERNAL_URL = os.environ.get("COMFYUI_INTERNAL_URL", "http://comfyui:8188")
 LITELLM_URL = os.environ.get("LITELLM_URL", "http://litellm:4000")
 LITELLM_KEY = os.environ.get("LITELLM_KEY", "")
+MATXA_ADAPTER_URL = os.environ.get("MATXA_ADAPTER_URL", "http://matxa-adapter:8002")
 
 ALLOWED_CONTAINERS = [
     "comfyui",
@@ -67,6 +68,11 @@ bearer_scheme = HTTPBearer(auto_error=False)
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+
+class TTSSpeechRequest(BaseModel):
+    text: str
+    voice: str
 
 
 def verify_webui_credentials(email: str, password: str) -> Optional[dict]:
@@ -659,6 +665,50 @@ def api_logs(container_name: str, tail: int = 200, user: dict = Depends(get_curr
 
 
 # ---------------------------------------------------------------------------
+# TTS proxy
+# ---------------------------------------------------------------------------
+
+@app.get("/api/tts/voices")
+def tts_voices(user: dict = Depends(get_current_user)) -> dict:
+    try:
+        r = requests.get(f"{MATXA_ADAPTER_URL}/v1/audio/voices", timeout=5)
+        r.raise_for_status()
+        return r.json()
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=503, detail=f"Matxa adapter unavailable: {exc}")
+
+
+@app.post("/api/tts/speech")
+def tts_speech(req: TTSSpeechRequest, user: dict = Depends(get_current_user)) -> Response:
+    payload = {
+        "model": "tts-1",
+        "input": req.text,
+        "voice": req.voice,
+        "response_format": "wav",
+        "speed": 1.0,
+    }
+    try:
+        r = requests.post(
+            f"{MATXA_ADAPTER_URL}/v1/audio/speech",
+            json=payload,
+            timeout=120,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Matxa adapter request failed: {exc}")
+    if r.status_code >= 400:
+        try:
+            detail = r.json().get("detail", r.text)
+        except ValueError:
+            detail = r.text
+        raise HTTPException(status_code=r.status_code, detail=detail)
+    return Response(
+        content=r.content,
+        media_type="audio/wav",
+        headers={"Content-Disposition": 'attachment; filename="speech.wav"'},
+    )
+
+
+# ---------------------------------------------------------------------------
 # SPA HTML
 # ---------------------------------------------------------------------------
 
@@ -952,6 +1002,9 @@ HTML = r"""<!DOCTYPE html>
         <div class="nav-item" onclick="showSection('data', this)">
           <span class="nav-icon">📈</span><span id="nav-data">Data</span>
         </div>
+        <div class="nav-item" onclick="showSection('tts', this); loadTTSVoices()">
+          <span class="nav-icon">🔊</span><span>Text2Speech</span>
+        </div>
       </div>
     </nav>
 
@@ -1019,6 +1072,40 @@ HTML = r"""<!DOCTYPE html>
             <div class="card-label" id="data-sources-label">Fuentes de datos</div>
             <div class="source-list" id="data-sources"></div>
           </div>
+        </div>
+      </div>
+
+      <!-- ── Text2Speech ── -->
+      <div class="section" id="sec-tts">
+        <h2>Text to Speech — Matxa</h2>
+        <div class="section-note">Genera àudio en català a partir de text. Veus proporcionades per Matxa TTS.</div>
+
+        <div style="max-width:640px; display:flex; flex-direction:column; gap:16px; margin-top:8px;">
+          <div class="form-group" style="margin:0">
+            <label for="tts-voice">Veu</label>
+            <select id="tts-voice" style="width:100%; background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--text); padding:10px 12px; font-size:.95rem;">
+              <option value="central-grau">Grau (Central)</option>
+            </select>
+          </div>
+
+          <div class="form-group" style="margin:0">
+            <label for="tts-text">Text (màx. 500 caràcters)</label>
+            <textarea id="tts-text" maxlength="500" rows="5"
+              placeholder="Escriu el text en català..."
+              style="width:100%; background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--text); padding:10px 12px; font-size:.95rem; resize:vertical; font-family:inherit;"></textarea>
+          </div>
+
+          <div>
+            <button id="tts-btn" class="btn btn-primary" onclick="generateSpeech()">Generar àudio</button>
+          </div>
+
+          <audio id="tts-player" controls style="display:none; width:100%; margin-top:4px;"></audio>
+
+          <a id="tts-download" style="display:none;" download="speech.wav">
+            <button class="btn btn-ghost">⬇ Descargar WAV</button>
+          </a>
+
+          <p id="tts-error" style="color:var(--red); display:none; font-size:.88rem;"></p>
         </div>
       </div>
     </main>
@@ -1492,6 +1579,62 @@ function showApp(name) {
   statusTimer = setInterval(refreshStatus, 5000);
   modelsTimer = setInterval(refreshModels, 15000);
   dataTimer = setInterval(refreshData, 60000);
+}
+
+async function loadTTSVoices() {
+  const sel = document.getElementById('tts-voice');
+  if (!sel || sel.dataset.loaded) return;
+  try {
+    const data = await apiFetch('/api/tts/voices');
+    sel.innerHTML = data.voices.map(v =>
+      `<option value="${v.id}">${v.name}</option>`
+    ).join('');
+    sel.dataset.loaded = '1';
+  } catch (_) {
+    // keep default option
+  }
+}
+
+async function generateSpeech() {
+  const text = (document.getElementById('tts-text').value || '').trim();
+  const voice = document.getElementById('tts-voice').value;
+  const btn = document.getElementById('tts-btn');
+  const player = document.getElementById('tts-player');
+  const dlBtn = document.getElementById('tts-download');
+  const errEl = document.getElementById('tts-error');
+
+  errEl.style.display = 'none';
+  if (!text) { errEl.textContent = 'El text no pot estar buit.'; errEl.style.display = 'block'; return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Generant...';
+  player.style.display = 'none';
+  dlBtn.style.display = 'none';
+
+  try {
+    const r = await fetch('/api/tts/speech', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voice }),
+    });
+    if (r.status === 401) { doLogout(); return; }
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      throw new Error(d.detail || `HTTP ${r.status}`);
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    player.src = url;
+    player.style.display = 'block';
+    dlBtn.href = url;
+    dlBtn.style.display = 'inline-flex';
+  } catch (e) {
+    errEl.textContent = 'Error: ' + e.message;
+    errEl.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generar àudio';
+  }
 }
 
 function showSection(id, navEl) {
