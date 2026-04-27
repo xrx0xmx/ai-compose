@@ -9,6 +9,8 @@ def test_backend_dockerfile_pins_upstream_commit() -> None:
     assert "MATXA_UPSTREAM_REF=b0084b203100b83ace8dfd2fde09fd18eb875e18" in dockerfile
     assert "MATXA_RUNTIME=cuda" in dockerfile
     assert "0001-enable-cuda-provider.patch" in dockerfile
+    assert "huggingface-hub[cli]" in dockerfile
+    assert "^onnxruntime(-gpu)?($|[<>=!~].*)" in dockerfile
 
 
 def test_backend_entrypoint_populates_cache_and_symlinks() -> None:
@@ -16,6 +18,7 @@ def test_backend_entrypoint_populates_cache_and_symlinks() -> None:
     assert "hf download projecte-aina/matxa-tts-cat-multiaccent" in entrypoint
     assert 'ln -sf "${MODEL_FILE}"' in entrypoint
     assert 'exec python3 -u app.py' in entrypoint
+    assert "command -v hf" in entrypoint
 
 
 def test_backend_patch_enables_runtime_provider_selection() -> None:

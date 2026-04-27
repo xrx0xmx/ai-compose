@@ -16,22 +16,26 @@ En `.env`:
 
 ```bash
 MATXA_UPSTREAM_REF=b0084b203100b83ace8dfd2fde09fd18eb875e18
-MATXA_RUNTIME=cuda
+MATXA_PROFILE=matxa-cuda
+MATXA_BACKEND_SERVICE=matxa-backend-cuda
 MATXA_EXECUTION_PROVIDER=cuda
+MATXA_EXECUTION_PROVIDER_CPU=cpu
 MATXA_CUDA_VISIBLE_DEVICES=0
 MATXA_ORT_CUDA_VISIBLE_DEVICES=0
 MATXA_ADAPTER_HOST_PORT=8012
 MATXA_DEFAULT_MODEL=tts-1
 MATXA_DEFAULT_VOICE=central-grau
 MATXA_REQUEST_TIMEOUT_SECONDS=120
+MATXA_HEALTH_TIMEOUT_SECONDS=1.0
 ```
 
 Valores habituales:
 
-- `MATXA_RUNTIME=cuda`: instala `onnxruntime-gpu` en la imagen.
-- `MATXA_RUNTIME=cpu`: conserva una variante de fallback sin CUDA.
+- `MATXA_PROFILE=matxa-cuda`: usa `matxa-backend-cuda` con runtime NVIDIA.
+- `MATXA_PROFILE=matxa-cpu`: usa `matxa-backend-cpu` sin requerir runtime NVIDIA.
 - `MATXA_EXECUTION_PROVIDER=cuda`: falla rapido si el contenedor no ve `CUDAExecutionProvider`.
 - `MATXA_EXECUTION_PROVIDER=auto`: usa CUDA cuando exista y CPU si no.
+- `MATXA_EXECUTION_PROVIDER_CPU=cpu`: fuerza la variante CPU a mantenerse fuera de CUDA.
 
 ## Directorios persistentes
 
@@ -51,7 +55,8 @@ Usa siempre los objetivos del `Makefile`:
 ```bash
 make up
 make ps
-make logs TARGET=matxa-backend TAIL=200
+make logs TARGET=matxa-backend-cuda TAIL=200
+make logs TARGET=matxa-backend-cpu TAIL=200
 make logs TARGET=matxa-adapter TAIL=200
 ```
 
@@ -69,7 +74,7 @@ make test-tts
 
 El comando:
 
-- llama a `POST http://127.0.0.1:8012/v1/audio/speech`
+- llama a `POST http://127.0.0.1:${MATXA_ADAPTER_HOST_PORT:-8012}/v1/audio/speech`
 - usa la voz `central-grau`
 - valida que la respuesta sea un WAV legible
 
@@ -111,7 +116,8 @@ TTS Model:    tts-1
 ## Comandos utiles
 
 ```bash
-make logs TARGET=matxa-backend TAIL=200
+make logs TARGET=matxa-backend-cuda TAIL=200
+make logs TARGET=matxa-backend-cpu TAIL=200
 make logs TARGET=matxa-adapter TAIL=200
 make doctor
 ```
@@ -121,12 +127,12 @@ make doctor
 ### El adapter devuelve 502
 
 - revisa `make logs TARGET=matxa-adapter TAIL=200`
-- revisa `make logs TARGET=matxa-backend TAIL=200`
+- revisa `make logs TARGET=$MATXA_BACKEND_SERVICE TAIL=200`
 - comprueba que `matxa-backend` este healthy en `make ps`
 
 ### El backend arranca en CPU cuando esperabas CUDA
 
-- confirma `MATXA_RUNTIME=cuda`
+- confirma `MATXA_PROFILE=matxa-cuda`
 - confirma `MATXA_EXECUTION_PROVIDER=cuda` o `auto`
 - ejecuta `nvidia-smi` en host
 - revisa si otros servicios estan agotando VRAM
@@ -136,7 +142,7 @@ make doctor
 Opciones de menor a mayor impacto:
 
 1. Ajustar `MATXA_EXECUTION_PROVIDER=auto` para tolerar fallback a CPU cuando CUDA no este disponible.
-2. Cambiar temporalmente a `MATXA_RUNTIME=cpu` para priorizar LLM o ComfyUI.
+2. Cambiar temporalmente a `MATXA_PROFILE=matxa-cpu` para priorizar LLM o ComfyUI en hosts sin runtime NVIDIA o bajo contencion.
 3. Revisar reparto de GPU con los perfiles `vllm-*` si la carga TTS pasa a ser sostenida.
 
 ## Licencia y distribucion

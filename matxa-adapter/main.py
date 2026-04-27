@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 MATXA_BACKEND_URL = os.getenv("MATXA_BACKEND_URL", "http://matxa-backend:8000").rstrip("/")
 MATXA_REQUEST_TIMEOUT_SECONDS = int(os.getenv("MATXA_REQUEST_TIMEOUT_SECONDS", "120"))
+MATXA_HEALTH_TIMEOUT_SECONDS = float(os.getenv("MATXA_HEALTH_TIMEOUT_SECONDS", "1.0"))
 DEFAULT_VOICE = os.getenv("MATXA_DEFAULT_VOICE", "central-grau")
 DEFAULT_MODEL = os.getenv("MATXA_DEFAULT_MODEL", "tts-1")
 MAX_INPUT_LENGTH = int(os.getenv("MATXA_MAX_INPUT_LENGTH", "500"))
@@ -96,8 +97,28 @@ def validate_input(input_text: str) -> str:
     return input_text
 
 
+def probe_backend() -> None:
+    try:
+        response = requests.get(
+            f"{MATXA_BACKEND_URL}/health",
+            timeout=MATXA_HEALTH_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=503, detail=f"Matxa backend not ready: {exc}") from exc
+
+    if response.status_code >= 400:
+        detail = detail_from_response(response)
+        raise HTTPException(status_code=503, detail=f"Matxa backend not ready: {detail}")
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
+    return {"status": "ok", "backend": MATXA_BACKEND_URL}
+
+
+@app.get("/ready")
+def ready() -> dict[str, str]:
+    probe_backend()
     return {"status": "ok", "backend": MATXA_BACKEND_URL}
 
 

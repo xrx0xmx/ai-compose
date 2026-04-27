@@ -64,7 +64,8 @@ LITELLM_KEY=...
 MODEL_SWITCHER_TOKEN=...
 ADMIN_JWT_SECRET=...
 MODEL_SWITCHER_DEFAULT=qwen-fast   # opcional; fallback a qwen-fast
-MATXA_RUNTIME=cuda                 # opcional; cpu o cuda
+MATXA_PROFILE=matxa-cuda           # opcional; matxa-cuda o matxa-cpu
+MATXA_BACKEND_SERVICE=matxa-backend-cuda
 MATXA_EXECUTION_PROVIDER=cuda      # opcional; cpu, cuda o auto
 ```
 
@@ -92,7 +93,7 @@ Publicacion actual directa por puertos:
 - `http://<host>/admin`
 - `http://<host>:3000`
 - `http://<host>:8188` cuando ComfyUI esta activo
-- `http://127.0.0.1:8012/v1` para smoke tests host-side de Matxa TTS
+- `http://127.0.0.1:${MATXA_ADAPTER_HOST_PORT:-8012}/v1` para smoke tests host-side de Matxa TTS
 
 ### Flujo diario
 
@@ -122,13 +123,14 @@ make logs TARGET=litellm TAIL=200
 make logs TARGET=vllm-fast TAIL=200
 make logs TARGET=comfyui TAIL=200
 make logs TARGET=matxa-adapter TAIL=200
-make logs TARGET=matxa-backend TAIL=200
+make logs TARGET=matxa-backend-cuda TAIL=200
+make logs TARGET=matxa-backend-cpu TAIL=200
 ```
 
 ### Deploy manual
 
 `deploy` no hace `pull` implicito.
-Rebuilda `admin-panel`, `model-switcher`, `matxa-backend` y `matxa-adapter`, baja el stack y lo vuelve a levantar.
+Rebuilda `admin-panel`, `model-switcher`, el backend Matxa seleccionado por `MATXA_BACKEND_SERVICE`, y `matxa-adapter`, baja el stack y lo vuelve a levantar.
 
 ```bash
 make deploy
@@ -164,7 +166,7 @@ make test-tts
 
 - en `llm`: llama a `POST http://127.0.0.1:4000/v1/chat/completions`
 - en `comfy`: llama a `GET http://127.0.0.1:8188/system_stats`
-- `make test-tts`: llama a `POST http://127.0.0.1:8012/v1/audio/speech` y valida que la respuesta sea un WAV legible
+- `make test-tts`: llama a `POST http://127.0.0.1:${MATXA_ADAPTER_HOST_PORT:-8012}/v1/audio/speech` y valida que la respuesta sea un WAV legible
 
 Chequeo opcional completo del sistema vivo:
 
@@ -185,7 +187,7 @@ make doctor
 
 La integracion Matxa se despliega solo en produccion en este repo actual.
 
-- `matxa-backend` empaqueta `langtech-bsc/minimal-tts-api` fijado a un commit conocido y soporta `MATXA_RUNTIME=cpu|cuda`.
+- `matxa-backend-cuda` y `matxa-backend-cpu` son variantes explicitas seleccionadas con `MATXA_PROFILE`.
 - `matxa-adapter` expone `POST /v1/audio/speech`, `GET /v1/audio/voices`, `GET /v1/models` y `GET /health`.
 - Open WebUI debe configurarse con base URL interna `http://matxa-adapter:8002/v1`.
 
@@ -281,14 +283,15 @@ make doctor
 ### Matxa TTS no responde o arranca en CPU
 
 ```bash
-make logs TARGET=matxa-backend TAIL=200
+make logs TARGET=matxa-backend-cuda TAIL=200
+make logs TARGET=matxa-backend-cpu TAIL=200
 make logs TARGET=matxa-adapter TAIL=200
 make test-tts
 ```
 
 Comprueba tambien:
 
-- `MATXA_RUNTIME` y `MATXA_EXECUTION_PROVIDER` en `.env`
+- `MATXA_PROFILE`, `MATXA_BACKEND_SERVICE` y `MATXA_EXECUTION_PROVIDER` en `.env`
 - que `/opt/ai/matxa-cache/` exista y sea escribible
 - `nvidia-smi` en host si esperas usar CUDA
 

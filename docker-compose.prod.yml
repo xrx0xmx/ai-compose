@@ -237,14 +237,14 @@ services:
     restart: unless-stopped
     profiles: ["comfy"]
 
-  matxa-backend:
+  matxa-backend-cuda:
     build:
       context: .
       dockerfile: matxa-backend/Dockerfile
       args:
         MATXA_UPSTREAM_REF: ${MATXA_UPSTREAM_REF:-b0084b203100b83ace8dfd2fde09fd18eb875e18}
-        MATXA_RUNTIME: ${MATXA_RUNTIME:-cuda}
-    container_name: matxa-backend
+        MATXA_RUNTIME: cuda
+    container_name: matxa-backend-cuda
     runtime: nvidia
     environment:
       - MATXA_EXECUTION_PROVIDER=${MATXA_EXECUTION_PROVIDER:-cuda}
@@ -255,6 +255,10 @@ services:
       - MATXA_MODEL_DIR=/cache/models
     volumes:
       - /opt/ai/matxa-cache:/cache
+    networks:
+      default:
+        aliases:
+          - matxa-backend
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
       interval: 30s
@@ -269,6 +273,35 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    profiles: ["matxa-cuda"]
+
+  matxa-backend-cpu:
+    build:
+      context: .
+      dockerfile: matxa-backend/Dockerfile
+      args:
+        MATXA_UPSTREAM_REF: ${MATXA_UPSTREAM_REF:-b0084b203100b83ace8dfd2fde09fd18eb875e18}
+        MATXA_RUNTIME: cpu
+    container_name: matxa-backend-cpu
+    environment:
+      - MATXA_EXECUTION_PROVIDER=${MATXA_EXECUTION_PROVIDER_CPU:-cpu}
+      - HF_HOME=/cache/huggingface
+      - HUGGINGFACE_HUB_CACHE=/cache/huggingface/hub
+      - MATXA_MODEL_DIR=/cache/models
+    volumes:
+      - /opt/ai/matxa-cache:/cache
+    networks:
+      default:
+        aliases:
+          - matxa-backend
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+    restart: unless-stopped
+    profiles: ["matxa-cpu"]
 
   matxa-adapter:
     build:
@@ -281,13 +314,11 @@ services:
       - MATXA_DEFAULT_MODEL=${MATXA_DEFAULT_MODEL:-tts-1}
       - MATXA_DEFAULT_VOICE=${MATXA_DEFAULT_VOICE:-central-grau}
       - MATXA_REQUEST_TIMEOUT_SECONDS=${MATXA_REQUEST_TIMEOUT_SECONDS:-120}
+      - MATXA_HEALTH_TIMEOUT_SECONDS=${MATXA_HEALTH_TIMEOUT_SECONDS:-1.0}
     ports:
       - "127.0.0.1:${MATXA_ADAPTER_HOST_PORT:-8012}:8002"
-    depends_on:
-      matxa-backend:
-        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8002/health')\""]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8002/ready')\""]
       interval: 30s
       timeout: 10s
       retries: 10

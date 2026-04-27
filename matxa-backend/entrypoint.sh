@@ -8,6 +8,11 @@ SPEAKER_FILE="${MODEL_DIR}/spk_to_id_3.json"
 
 mkdir -p "${MODEL_DIR}" "${HF_HOME:-/cache/huggingface}" "${HUGGINGFACE_HUB_CACHE:-/cache/huggingface/hub}"
 
+if ! command -v hf >/dev/null 2>&1; then
+  echo "[matxa-backend] missing 'hf' CLI. Install huggingface-hub[cli] in the image."
+  exit 1
+fi
+
 if [[ ! -f "${MODEL_FILE}" ]] || [[ ! -f "${CONFIG_FILE}" ]]; then
   echo "[matxa-backend] downloading Matxa model assets into ${MODEL_DIR}"
   hf download projecte-aina/matxa-tts-cat-multiaccent matxa_multiaccent_wavenext_e2e.onnx --local-dir "${MODEL_DIR}"

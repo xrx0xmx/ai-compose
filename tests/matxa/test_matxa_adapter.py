@@ -28,6 +28,38 @@ def test_health_reports_backend_url(monkeypatch) -> None:
     assert response.json() == {"status": "ok", "backend": "http://matxa-backend:8000"}
 
 
+def test_ready_returns_backend_probe_status(monkeypatch) -> None:
+    module = load_module()
+
+    def fake_get(url, timeout):
+        assert url.endswith("/health")
+        assert timeout == module.MATXA_HEALTH_TIMEOUT_SECONDS
+        return SimpleNamespace(status_code=200, text="", json=lambda: {"status": "ok"})
+
+    monkeypatch.setattr(module.requests, "get", fake_get)
+    client = TestClient(module.app)
+
+    response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "backend": module.MATXA_BACKEND_URL}
+
+
+def test_ready_returns_503_when_backend_is_down(monkeypatch) -> None:
+    module = load_module()
+
+    def fake_get(url, timeout):
+        raise module.requests.RequestException("connection refused")
+
+    monkeypatch.setattr(module.requests, "get", fake_get)
+    client = TestClient(module.app)
+
+    response = client.get("/ready")
+
+    assert response.status_code == 503
+    assert "Matxa backend not ready" in response.json()["detail"]
+
+
 def test_list_voices_returns_expected_catalog() -> None:
     module = load_module()
     client = TestClient(module.app)

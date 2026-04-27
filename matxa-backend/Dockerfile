@@ -44,8 +44,9 @@ COPY matxa-backend/patches/0001-enable-cuda-provider.patch /tmp/0001-enable-cuda
 RUN if [ "${MATXA_RUNTIME}" = "cuda" ]; then patch -p1 < /tmp/0001-enable-cuda-provider.patch; fi
 
 RUN python3 -m pip install --no-cache-dir --upgrade pip \
-  && grep -vE '^onnxruntime(-gpu)?$' requirements.txt > /tmp/matxa-requirements.txt \
+  && grep -vE '^onnxruntime(-gpu)?($|[<>=!~].*)' requirements.txt > /tmp/matxa-requirements.txt \
   && python3 -m pip install --no-cache-dir -r /tmp/matxa-requirements.txt \
+  && python3 -m pip install --no-cache-dir 'huggingface-hub[cli]' \
   && if [ "${MATXA_RUNTIME}" = "cuda" ]; then \
       python3 -m pip install --no-cache-dir onnxruntime-gpu; \
     else \
