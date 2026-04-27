@@ -1,20 +1,28 @@
-# ai-compose (LiteLLM + vLLM + ComfyUI + Open WebUI)
+# ai-compose
+
+Stack de servidor con GPU para servir modelos open source con:
+- LiteLLM
+- vLLM
+- ComfyUI
+- Open WebUI
+- panel admin propio
+- model switcher para arbitrar una sola GPU entre LLM y ComfyUI
 
 ## Estructura
 
-```
+```text
 docker-compose.yml          # Base: LiteLLM + Open WebUI
 docker-compose.local.yml    # Override local: Ollama (Mac, sin GPU)
 docker-compose.prod.yml     # Override prod: vLLM + ComfyUI + NVIDIA GPU
-.env.example                # Plantilla de variables requeridas en prod
-litellm-config.yml          # Config LiteLLM → vLLM (producción)
-litellm-config.local.yml    # Config LiteLLM → Ollama (local)
-Makefile                    # Atajos local-* y prod-*
-Makefile.ops                # Comandos operativos (VPN/SSH)
-versions.lock               # Lock de versiones de imagen consumido por Makefile
+.env.example                # Plantilla de credenciales y defaults
+litellm-config.yml          # Config LiteLLM -> vLLM (produccion)
+litellm-config.local.yml    # Config LiteLLM -> Ollama (local)
+Makefile                    # Fachada minima para operar produccion
+Makefile.ops                # VPN / SSH
+versions.lock               # Versiones de imagen consumidas por compose
 control/                    # API HTTP para cambiar modelos y modo llm/comfy
 control/Dockerfile          # Imagen del model switcher
-scripts/prod_test_auto.sh   # Batería automática de validación en producción
+scripts/ops.sh              # Logica operativa real
 compatibility-matrix.md     # Matriz de compatibilidad de modelos/runtime
 ```
 
@@ -22,454 +30,220 @@ compatibility-matrix.md     # Matriz de compatibilidad de modelos/runtime
 
 Usa siempre `make` para operaciones de Docker en este proyecto.
 
-Las versiones de imagen se gobiernan desde `versions.lock` (incluido por `Makefile`).
-
-## Comandos simplificados (recomendados)
+La operacion de produccion queda reducida a estos comandos:
 
 ```bash
-# Arranque por bloques
-make up MODE=all
-make up MODE=infra
-make up MODE=models
-
-# Parada / reset
+make up
 make down
-make purge CONFIRM=YES SCOPE=project
-# make purge CONFIRM=YES SCOPE=host   # destructivo a nivel host
-
-# Logs
+make deploy
+make ps
 make logs TARGET=all TAIL=200
-make logs TARGET=litellm TAIL=200
-make logs TARGET=vllm-<id-dinamico> TAIL=200
-
-# Control independiente de servicio/contenedor
-make start TARGET=admin-panel
-make stop TARGET=admin-panel
+make status
+make test
+make switch MODEL=qwen-fast
+make mode MODE=comfy TTL=45
+make mode MODE=llm MODEL=qwen-fast
+make doctor
+make pull
 ```
 
-## Versionado de imágenes
+## `.env`
 
-En esta release de compatibilidad, `versions.lock` mantiene las imágenes tal como se usan hoy en producción.
-`make prod-image-lock-check` valida que las variables estén definidas y avisa si hay tags no deterministas
-(`latest`/`main`) para dejar el pinning por digest a una fase posterior y probada.
+`.env` sigue siendo la unica base de credenciales y defaults.
 
-Antes de desplegar:
+Variables esperadas:
 
 ```bash
-make prod-image-lock-check
-ALLOW_LEGACY_POSTGRES_PASSWORD=1 make prod-upgrade-precheck
-ALLOW_LEGACY_POSTGRES_PASSWORD=1 make prod-upgrade-canary
-MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-upgrade-verify
+POSTGRES_PASSWORD=...
+LITELLM_KEY=...
+MODEL_SWITCHER_TOKEN=...
+ADMIN_JWT_SECRET=...
+MODEL_SWITCHER_DEFAULT=qwen-fast   # opcional; fallback a qwen-fast
 ```
 
-## Entorno requerido (producción)
-
-Usa `.env.example` como plantilla y define todos los secretos:
+Para crear uno nuevo:
 
 ```bash
 cp .env.example .env
 $EDITOR .env
 ```
 
-Validación de entorno:
+No hace falta pasar `MODEL_SWITCHER_TOKEN` o `LITELLM_KEY` por CLI para uso normal.
+`make` y `scripts/ops.sh` cargan `.env` automaticamente.
+
+## Produccion
+
+Directorios del servidor:
+- `/opt/ai/compose/`
+- `/opt/ai/hf-cache/`
+- `/opt/ai/postgres/`
+- `/opt/ai/openwebui-data/`
+- `/opt/ai/comfyui-data/`
+
+Publicacion actual directa por puertos:
+- `http://<host>/admin`
+- `http://<host>:3000`
+- `http://<host>:8188` cuando ComfyUI esta activo
+
+### Flujo diario
+
+Levantar stack:
 
 ```bash
-make prod-preflight-env
+make up
 ```
 
-`prod-preflight-env` falla si falta una variable requerida, si hay placeholders inseguros o si la entropía mínima no se cumple.
-`MODEL_SWITCHER_ADMIN_TOKEN` queda deprecado y no se usa en flujo operativo.
-Si `MODEL_SWITCHER_DEFAULT` no está definido, el preflight avisa y asume `qwen-fast` por compatibilidad.
-
-Excepción legacy para despliegues ya inicializados:
+Parar stack:
 
 ```bash
-ALLOW_LEGACY_POSTGRES_PASSWORD=1 make prod-preflight-env
+make down
 ```
 
-Usa esta excepción solo si la instancia de Postgres existente ya fue inicializada con `POSTGRES_PASSWORD=changeme_pg`.
-No cambies ese valor en `.env` justo antes de reiniciar: en Postgres ese env var no rota la contraseña real de una base ya creada y puedes desincronizar las apps con la credencial efectiva.
-
-Excepción legacy adicional para LiteLLM:
+Ver contenedores:
 
 ```bash
-ALLOW_LEGACY_LITELLM_KEY=1 make prod-preflight-env
+make ps
 ```
 
-Úsala solo si la instancia actual todavía depende de `LITELLM_KEY=cambiaLAclave`.
-No rotes esa clave en esta fase de compatibilidad: el proyecto mantiene `cambiaLAclave` en plantillas/configuraciones activas de LiteLLM y cambiar solo `.env` puede desincronizar Open WebUI, admin, switcher y la config efectiva del proxy LLM.
-
-Excepción legacy adicional para model-switcher:
+Ver logs:
 
 ```bash
-ALLOW_LEGACY_MODEL_SWITCHER_TOKEN=1 make prod-preflight-env
+make logs TARGET=all TAIL=200
+make logs TARGET=litellm TAIL=200
+make logs TARGET=vllm-fast TAIL=200
+make logs TARGET=comfyui TAIL=200
 ```
 
-Úsala solo si el token actual del `model-switcher` es débil o heredado y aún no vas a rotarlo coordinadamente.
-En esta fase de compatibilidad priorizamos no romper producción sobre endurecer inmediatamente ese secreto.
+### Deploy manual
 
-Excepción legacy adicional para admin:
+`deploy` no hace `pull` implicito.
+Solo rebuilda `admin-panel` y `model-switcher`, baja el stack y lo vuelve a levantar.
 
 ```bash
-ALLOW_LEGACY_ADMIN_JWT_SECRET=1 make prod-preflight-env
+make deploy
 ```
 
-Úsala solo si el secreto actual del admin es heredado y todavía no vas a rotarlo con reinicio coordinado del servicio.
-
-## Producción (servidor con GPU)
-
-Directorios en el servidor (propiedad de aiservices:aiservices):
-- `/opt/ai/compose/`         — este proyecto
-- `/opt/ai/hf-cache/`        — cache HuggingFace compartida
-- `/opt/ai/postgres/`        — datos de Postgres
-- `/opt/ai/openwebui-data/`  — datos de Open WebUI
-- `/opt/ai/comfyui-data/`    — datos persistentes de ComfyUI
-
-Imagen de ComfyUI (override opcional):
-- default: `yanwk/comfyui-boot:cu126-slim`
-- override en `.env`: `COMFYUI_IMAGE=<tu_imagen>`
-
-Passthrough GPU para ComfyUI (producción):
-- `comfyui` usa `runtime: nvidia` + `gpus: all`
-- variables NVIDIA explícitas: `NVIDIA_VISIBLE_DEVICES=all` y `NVIDIA_DRIVER_CAPABILITIES=compute,utility`
-
-### Inicialización recomendada (una vez)
+Si quieres actualizar imagenes externas de forma explicita antes:
 
 ```bash
-cd /opt/ai/compose
-make prod-bootstrap-models
+make pull
+make deploy
 ```
 
-Esto crea los contenedores `vllm-*` para evitar errores `container not found` al hacer switch.
-También crea `comfyui` para permitir el modo imagen bajo demanda.
+### Estado y smoke tests
 
-### Arranque base
+Estado actual del sistema:
 
 ```bash
-make prod-init
+make status
 ```
 
-Esto levanta servicios base y crea contenedores de modelos/comfy.
+Devuelve al menos:
+- si el `model-switcher` responde
+- modo activo
+- modelo activo si esta en LLM
+- ultimo error conocido si existe
 
-### Pre-deploy recomendado (week1 gate)
+Smoke test real segun modo activo:
 
 ```bash
-cp .env .env.backup.$(date +%Y%m%d%H%M%S)
-cp versions.lock versions.lock.backup.$(date +%Y%m%d%H%M%S)
-ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 ALLOW_LEGACY_MODEL_SWITCHER_TOKEN=1 ALLOW_LEGACY_ADMIN_JWT_SECRET=1 make prod-preflight-env
-make prod-image-lock-check
+make test
 ```
 
-Si cambias `docker-compose.prod.yml` (imagen/env/runtime GPU), recrea contenedores:
+- en `llm`: llama a `POST http://127.0.0.1:4000/v1/chat/completions`
+- en `comfy`: llama a `GET http://127.0.0.1:8188/system_stats`
+
+Chequeo opcional completo del sistema vivo:
 
 ```bash
-make prod-down
-make prod-init
+make doctor
 ```
 
-### Upgrade canary (automatizado)
+`doctor` ejecuta:
+- `docker compose ps`
+- `make status`
+- `make test`
+- comprobacion HTTP de Open WebUI en `:3000`
+- comprobacion HTTP de `/admin`
+- comprobacion de Comfy solo si el modo activo es `comfy`
+
+## Modo y modelos
+
+Cambiar modelo LLM:
 
 ```bash
-ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 ALLOW_LEGACY_MODEL_SWITCHER_TOKEN=1 ALLOW_LEGACY_ADMIN_JWT_SECRET=1 make prod-upgrade-precheck
-ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 ALLOW_LEGACY_MODEL_SWITCHER_TOKEN=1 ALLOW_LEGACY_ADMIN_JWT_SECRET=1 make prod-upgrade-canary
-MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-upgrade-verify
+make switch MODEL=qwen-fast
+make switch MODEL=deepseek
 ```
 
-Atajo todo-en-uno:
+Activar ComfyUI con TTL:
 
 ```bash
-ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 ALLOW_LEGACY_MODEL_SWITCHER_TOKEN=1 ALLOW_LEGACY_ADMIN_JWT_SECRET=1 MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-upgrade-promote
+make mode MODE=comfy TTL=45
 ```
 
-Rollback:
+Volver a LLM:
 
 ```bash
-make prod-upgrade-rollback ROLLBACK_REF=<git-ref-estable>
+make mode MODE=llm MODEL=qwen-fast
 ```
 
-### Preflight GPU antes de activar ComfyUI
+Si no pasas `MODEL` al volver a LLM, se usa:
+- `MODEL_SWITCHER_DEFAULT` si esta definido
+- `qwen-fast` si no lo esta
+
+## Modelo mental del sistema
+
+El `model-switcher` gestiona dos modos excluyentes en una sola GPU:
+- `llm`: LiteLLM + un unico `vllm-*` activo
+- `comfy`: ComfyUI activo, `litellm` y `vllm-*` detenidos
+
+El panel `/admin` y Open WebUI dependen del mismo estado de switch.
+
+## Troubleshooting rapido
+
+### `make status` devuelve token invalido
+
+Comprueba que el valor de `MODEL_SWITCHER_TOKEN` en `.env` coincide con el que usa el contenedor en ejecucion.
+Luego recarga shell si hace falta:
 
 ```bash
-make prod-gpu-preflight
-MODEL_SWITCHER_TOKEN=tu_token_seguro COMFY_TTL=45 make prod-comfy-on-safe
+set -a
+source ./.env
+set +a
 ```
 
-`prod-comfy-on-safe` ejecuta primero el preflight (host + Docker) y solo si pasa activa modo `comfy`.
+### ComfyUI no arranca por GPU
 
-### Troubleshooting: `Found no NVIDIA driver on your system`
+Comprueba en host:
 
-Si en `make prod-logs SERVICE=comfyui TAIL=120` aparece este error:
-
-```text
-RuntimeError: Found no NVIDIA driver on your system
-```
-
-Valida en este orden:
-
-1. Host (fuera de Docker):
 ```bash
-lspci | grep -Ei 'nvidia|vga|3d'
 nvidia-smi
-lsmod | grep nvidia
 ```
 
-2. Runtime NVIDIA en Docker:
+Comprueba runtime Docker:
+
 ```bash
-docker info | grep -E 'Runtimes|Default Runtime'
 docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 nvidia-smi
 ```
 
-3. Si Docker no ve GPU dentro del contenedor:
-```bash
-sudo apt-get install -y nvidia-container-toolkit
-sudo nvidia-ctk runtime configure --runtime=docker
-sudo systemctl restart docker
-docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu22.04 nvidia-smi
-```
-
-4. Reintenta ComfyUI desde el flujo soportado:
-```bash
-MODEL_SWITCHER_TOKEN=tu_token_seguro COMFY_TTL=45 make prod-comfy-on-safe
-make prod-logs SERVICE=comfyui TAIL=120
-make prod-test
-```
-
-### Modo de carga (exclusión estricta GPU)
-
-`model-switcher` gestiona dos modos excluyentes en una sola GPU:
-- `llm` (default): LiteLLM + un único `vllm-*` activo.
-- `comfy`: ComfyUI activo, `litellm` + `vllm-*` detenidos.
-
-Comandos:
+### Open WebUI o admin no responden
 
 ```bash
-MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-mode-status
-MODEL_SWITCHER_TOKEN=tu_token_seguro COMFY_TTL=45 make prod-comfy-on
-MODEL_SWITCHER_TOKEN=tu_token_seguro MODEL=qwen-fast make prod-comfy-off
-MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-llm-priority
+make ps
+make logs TARGET=open-webui TAIL=200
+make logs TARGET=admin-panel TAIL=200
+make doctor
 ```
 
-`prod-comfy-on` aplica lease con TTL (default 45 min, máximo 90). Al expirar, vuelve automáticamente a `llm` con `qwen-fast` (o `MODEL_SWITCHER_DEFAULT`).
+## Operaciones host
 
-### Reconciliación de arranque (startup)
-
-Al iniciar `model-switcher`, se ejecuta una reconciliación bloqueante del estado persistido:
-- Si el modo persistido es `llm`, valida modelo objetivo (`active_model` o fallback a `MODEL_SWITCHER_DEFAULT`) y deja consistente `LiteLLM + un único vllm-*`.
-- Si el modo persistido es `comfy`, valida `comfyui` activo y `litellm` detenido.
-- Si faltan contenedores creados, el error queda registrado en `last_error` y en `switch.error` con mensaje accionable (`make prod-bootstrap-models`).
-
-## Model switcher (control desde Open WebUI)
-
-Permite cambiar modelo desde un Tool OpenAPI en Open WebUI.
-Tambien expone UI minima de administracion en `GET /admin`.
-
-### 1) Configurar token y defaults (host)
-
-```bash
-cd /opt/ai/compose
-printf "MODEL_SWITCHER_TOKEN=tu_token_seguro\nMODEL_SWITCHER_DEFAULT=qwen-fast\n" >> .env
-```
-
-### 2) Verificar estado
-
-```bash
-MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-status
-```
-
-### 3) Configurar Tool en Open WebUI (admin)
-
-- URL OpenAPI: `http://model-switcher:9000/openapi.json`
-- Header: `Authorization: Bearer tu_token_seguro`
-- Restringir el Tool a usuarios admin.
-- Para evitar timeouts en chat, llamar `POST /switch` con `wait_for_ready=false` y mostrar al usuario `switch_id` + `state_text`.
-- Hacer polling de `GET /status` cada 2-5s y leer `switch.state_text` y `switch.ready`.
-
-### 4) Prueba rápida desde host
-
-```bash
-MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-list-models
-MODEL_SWITCHER_TOKEN=tu_token_seguro HF_URL=https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-AWQ make prod-register-model
-MODEL_SWITCHER_TOKEN=tu_token_seguro MODEL=<id-dinamico> make prod-unregister-model
-MODEL_SWITCHER_TOKEN=tu_token_seguro MODEL=qwen-fast make prod-switch
-MODEL_SWITCHER_TOKEN=tu_token_seguro MODEL=qwen-fast make prod-switch-async
-MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-status
-MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-mode-status
-MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-test-auto
-make prod-admin-url
-```
-
-## Endpoints del switcher
-
-- `GET /health`
-- `GET /healthz/ready` (solo `ready` cuando el modo activo es `llm`)
-- `GET /admin` (UI minima para operaciones de modo)
-- `GET /models`
-- `POST /models/register` body: `{"huggingface_url":"https://huggingface.co/org/repo","model_id":"opcional","litellm_model":"opcional","quantization":"opcional","gpu_memory_utilization":0.9,"max_model_len":4096,"max_num_seqs":1,"trust_remote_code":false,"tokenizer":"opcional","revision":"opcional","dtype":"opcional","vllm_image":"opcional","extra_args":["--enforce-eager"]}`
-- `DELETE /models/{model_id}` (solo dinámicos)
-- `GET /status`
-- `GET /mode`
-- `POST /switch` body: `{"model":"<id-en-/models>","wait_for_ready":true|false}`
-- `POST /mode/switch` body: `{"mode":"llm|comfy","model":"<id-en-/models>"(solo llm),"ttl_minutes":45(solo comfy),"wait_for_ready":true|false}`
-- `POST /mode/release`
-- `POST /stop`
-
-`POST /models/register`:
-- acepta URL de Hugging Face (`huggingface.co/org/repo` o `org/repo`)
-- genera template LiteLLM automáticamente
-- registra el modelo en el switcher y crea contenedor vLLM dinámico on-demand
-- `trust_remote_code=true` requiere política habilitada y repo en allowlist (`MODEL_SWITCHER_TRUSTED_REPOS`)
-
-Ejemplo con `trust_remote_code`:
-
-```bash
-MODEL_SWITCHER_TOKEN=tu_token_seguro \
-HF_URL=https://huggingface.co/org/repo \
-MODEL_ID=modelo-avanzado \
-TRUST_REMOTE_CODE=true \
-TOKENIZER=org/tokenizer-base \
-REVISION=main \
-make prod-register-model
-```
-
-`POST /switch`:
-- `wait_for_ready=true` (default): respuesta bloqueante hasta éxito/error con estado final.
-- `wait_for_ready=false`: respuesta rápida `202` con `status` (`accepted|in_progress`), `switch_id`, `to_model`, `state_text`, `poll_endpoint`.
-
-`GET /status` incluye además un bloque `switch` con:
-- `id`, `state` (`queued|running|success|failed|rolled_back`), `from_model`, `to_model`
-- `current_step`, `state_text`, `started_at`, `updated_at`, `finished_at`
-- `duration_ms`, `error`, `steps`, `ready`
-- `active_litellm_model` (id real para llamadas a LiteLLM, ej. `deepseek-r1`)
-
-`GET /mode` devuelve:
-- modo activo (`llm|comfy`) y lease de ComfyUI (`expires_at`, `remaining_seconds`, `expired`)
-- estado de `litellm`, `comfyui`, `running_models` y switch en curso
-
-## Publicación directa por puertos (sin gateway Nginx)
-
-El stack productivo publica directamente en host:
-- `http://<host>:80/admin` -> panel admin
-- `http://<host>:3000` -> OpenWebUI
-- `http://<host>:8188` -> ComfyUI (cuando está activo)
-
-Pasos:
-
-```bash
-make prod-down
-make prod-init
-```
-
-Validaciones rápidas:
-
-```bash
-# 3000 debe aparecer; 8188 aparece cuando ComfyUI está activo
-make prod-ports-check
-
-# URLs directas
-make prod-proxy-check
-```
-
-Nota: `:8188` puede no responder cuando ComfyUI está apagado (modo `llm`), y se considera normal.
-
-La UI `/admin` pide token `MODEL_SWITCHER_TOKEN` y usa:
-- `POST /mode/switch` para `llm|comfy`
-- `POST /mode/release` para preemption inmediata a LLM
-- `GET /status` + `GET /models` para panel unificado `Estado`, `Modelos IA` y `Data`
-- Logs integrados en `Estado` (seleccion de contenedor + auto refresh)
-- `Data` muestra solo agregados anonimos (`tokens`, `chats`, `usuarios`, `mensajes`)
-
-Para habilitar métricas de tokens en `Data`, define `LITELLM_KEY` (si LiteLLM protege `/metrics`).
-
-## Runbook de recuperación rápida
-
-Caso: sistema en `comfy` y chat LLM no disponible.
-
-1. Verifica modo:
-```bash
-MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-mode-status
-```
-
-2. Inspecciona estado detallado (incluye `active_litellm_model`):
-```bash
-MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-status
-```
-
-3. Recupera prioridad LLM (forzado):
-```bash
-MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-llm-priority
-```
-
-4. Confirma estado:
-```bash
-MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-mode-status
-MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-test
-```
-
-Caso: `deepseek` activo pero LiteLLM devuelve `Cannot connect to host vllm-deepseek`.
-
-1. Inspecciona estado y logs:
-```bash
-MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-mode-status
-MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-status
-make prod-logs SERVICE=litellm TAIL=200
-make prod-logs SERVICE=vllm-deepseek TAIL=200
-```
-
-2. Si faltan contenedores (`containers.deepseek.exists=false` o `comfyui`/modelos inexistentes), crea bootstrap:
-```bash
-make prod-bootstrap-models
-```
-
-3. Fuerza prioridad LLM y activa DeepSeek:
-```bash
-MODEL_SWITCHER_TOKEN=tu_token_seguro make prod-llm-priority
-MODEL_SWITCHER_TOKEN=tu_token_seguro MODEL=deepseek make prod-switch
-```
-
-4. Verifica respuesta con el id real de LiteLLM (`deepseek-r1`):
-```bash
-curl -sf http://127.0.0.1:4000/v1/chat/completions \
-  -H "Authorization: Bearer <LITELLM_KEY>" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"deepseek-r1","messages":[{"role":"user","content":"ping"}],"temperature":0}' | jq
-```
-
-## Test único de salud
-
-```bash
-make prod-test
-```
-
-`prod-test` autodetecta el modo activo:
-- En `llm`, ejecuta `POST /v1/chat/completions` contra LiteLLM con `active_litellm_model` (o fallback por mapeo `/models`).
-- En `comfy`, ejecuta `GET http://127.0.0.1:8188/system_stats` directamente contra ComfyUI.
-
-En ambos casos imprime la llamada que ha usado para verificar.
-
-## Batería automática (canary gate)
-
-```bash
-MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-test-auto
-```
-
-Modo extensivo (incluye drill de fallo/rollback controlado):
-
-```bash
-MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-test-auto-ext
-```
-
-Artefactos:
-- `artifacts/prod-test-auto-<timestamp>.log`
-- `artifacts/prod-test-auto-<timestamp>.json`
-
-## Comandos operativos (VPN/SSH)
-
-Los comandos se han movido a `Makefile.ops` y se incluyen automáticamente desde `Makefile`.
-Se siguen ejecutando igual:
+Siguen disponibles desde `Makefile.ops`:
 
 ```bash
 make vpn-up
 make vpn-down
 make vpn-status
 make ssh
+make scp-home SCP_SRC=. SCP_DEST=~/
 ```
