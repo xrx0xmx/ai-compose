@@ -5,6 +5,7 @@ Stack de servidor con GPU para servir modelos open source con:
 - vLLM
 - ComfyUI
 - Open WebUI
+- Matxa TTS para català
 - panel admin propio
 - model switcher para arbitrar una sola GPU entre LLM y ComfyUI
 
@@ -22,8 +23,11 @@ Makefile.ops                # VPN / SSH
 versions.lock               # Versiones de imagen consumidas por compose
 control/                    # API HTTP para cambiar modelos y modo llm/comfy
 control/Dockerfile          # Imagen del model switcher
+matxa-backend/              # Wrapper reproducible de minimal-tts-api (BSC)
+matxa-adapter/              # Adapter OpenAI-compatible para TTS
 scripts/ops.sh              # Logica operativa real
 compatibility-matrix.md     # Matriz de compatibilidad de modelos/runtime
+docs/runbooks/matxa-tts.md  # Configuracion y smoke tests de Matxa
 ```
 
 ## Regla operativa
@@ -40,6 +44,7 @@ make ps
 make logs TARGET=all TAIL=200
 make status
 make test
+make test-tts
 make switch MODEL=qwen-fast
 make mode MODE=comfy TTL=45
 make mode MODE=llm MODEL=qwen-fast
@@ -59,6 +64,8 @@ LITELLM_KEY=...
 MODEL_SWITCHER_TOKEN=...
 ADMIN_JWT_SECRET=...
 MODEL_SWITCHER_DEFAULT=qwen-fast   # opcional; fallback a qwen-fast
+MATXA_RUNTIME=cuda                 # opcional; cpu o cuda
+MATXA_EXECUTION_PROVIDER=cuda      # opcional; cpu, cuda o auto
 ```
 
 Para crear uno nuevo:
@@ -79,11 +86,13 @@ Directorios del servidor:
 - `/opt/ai/postgres/`
 - `/opt/ai/openwebui-data/`
 - `/opt/ai/comfyui-data/`
+- `/opt/ai/matxa-cache/`
 
 Publicacion actual directa por puertos:
 - `http://<host>/admin`
 - `http://<host>:3000`
 - `http://<host>:8188` cuando ComfyUI esta activo
+- `http://127.0.0.1:8012/v1` para smoke tests host-side de Matxa TTS
 
 ### Flujo diario
 
@@ -112,12 +121,14 @@ make logs TARGET=all TAIL=200
 make logs TARGET=litellm TAIL=200
 make logs TARGET=vllm-fast TAIL=200
 make logs TARGET=comfyui TAIL=200
+make logs TARGET=matxa-adapter TAIL=200
+make logs TARGET=matxa-backend TAIL=200
 ```
 
 ### Deploy manual
 
 `deploy` no hace `pull` implicito.
-Solo rebuilda `admin-panel` y `model-switcher`, baja el stack y lo vuelve a levantar.
+Rebuilda `admin-panel`, `model-switcher`, `matxa-backend` y `matxa-adapter`, baja el stack y lo vuelve a levantar.
 
 ```bash
 make deploy
@@ -148,10 +159,12 @@ Smoke test real segun modo activo:
 
 ```bash
 make test
+make test-tts
 ```
 
 - en `llm`: llama a `POST http://127.0.0.1:4000/v1/chat/completions`
 - en `comfy`: llama a `GET http://127.0.0.1:8188/system_stats`
+- `make test-tts`: llama a `POST http://127.0.0.1:8012/v1/audio/speech` y valida que la respuesta sea un WAV legible
 
 Chequeo opcional completo del sistema vivo:
 
@@ -163,9 +176,38 @@ make doctor
 - `docker compose ps`
 - `make status`
 - `make test`
+- `make test-tts`
 - comprobacion HTTP de Open WebUI en `:3000`
 - comprobacion HTTP de `/admin`
 - comprobacion de Comfy solo si el modo activo es `comfy`
+
+## TTS en català
+
+La integracion Matxa se despliega solo en produccion en este repo actual.
+
+- `matxa-backend` empaqueta `langtech-bsc/minimal-tts-api` fijado a un commit conocido y soporta `MATXA_RUNTIME=cpu|cuda`.
+- `matxa-adapter` expone `POST /v1/audio/speech`, `GET /v1/audio/voices`, `GET /v1/models` y `GET /health`.
+- Open WebUI debe configurarse con base URL interna `http://matxa-adapter:8002/v1`.
+
+Configuracion recomendada en Open WebUI:
+
+```text
+Admin Panel -> Settings -> Audio -> Text-to-Speech
+
+TTS Engine:   OpenAI
+API Base URL: http://matxa-adapter:8002/v1
+API Key:      matxa-local
+TTS Voice:    central-grau
+TTS Model:    tts-1
+```
+
+La frase de referencia para pruebas es:
+
+```text
+La seva gerra sembla molt antiga i el viatge fou molt llarg.
+```
+
+Consulta el runbook detallado en `docs/runbooks/matxa-tts.md`.
 
 ## Modo y modelos
 
@@ -235,6 +277,20 @@ make logs TARGET=open-webui TAIL=200
 make logs TARGET=admin-panel TAIL=200
 make doctor
 ```
+
+### Matxa TTS no responde o arranca en CPU
+
+```bash
+make logs TARGET=matxa-backend TAIL=200
+make logs TARGET=matxa-adapter TAIL=200
+make test-tts
+```
+
+Comprueba tambien:
+
+- `MATXA_RUNTIME` y `MATXA_EXECUTION_PROVIDER` en `.env`
+- que `/opt/ai/matxa-cache/` exista y sea escribible
+- `nvidia-smi` en host si esperas usar CUDA
 
 ## Operaciones host
 

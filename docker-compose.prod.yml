@@ -237,6 +237,63 @@ services:
     restart: unless-stopped
     profiles: ["comfy"]
 
+  matxa-backend:
+    build:
+      context: .
+      dockerfile: matxa-backend/Dockerfile
+      args:
+        MATXA_UPSTREAM_REF: ${MATXA_UPSTREAM_REF:-b0084b203100b83ace8dfd2fde09fd18eb875e18}
+        MATXA_RUNTIME: ${MATXA_RUNTIME:-cuda}
+    container_name: matxa-backend
+    runtime: nvidia
+    environment:
+      - MATXA_EXECUTION_PROVIDER=${MATXA_EXECUTION_PROVIDER:-cuda}
+      - CUDA_VISIBLE_DEVICES=${MATXA_CUDA_VISIBLE_DEVICES:-0}
+      - ORT_CUDA_VISIBLE_DEVICES=${MATXA_ORT_CUDA_VISIBLE_DEVICES:-0}
+      - HF_HOME=/cache/huggingface
+      - HUGGINGFACE_HUB_CACHE=/cache/huggingface/hub
+      - MATXA_MODEL_DIR=/cache/models
+    volumes:
+      - /opt/ai/matxa-cache:/cache
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  matxa-adapter:
+    build:
+      context: .
+      dockerfile: matxa-adapter/Dockerfile
+    container_name: matxa-adapter
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - MATXA_BACKEND_URL=http://matxa-backend:8000
+      - MATXA_DEFAULT_MODEL=${MATXA_DEFAULT_MODEL:-tts-1}
+      - MATXA_DEFAULT_VOICE=${MATXA_DEFAULT_VOICE:-central-grau}
+      - MATXA_REQUEST_TIMEOUT_SECONDS=${MATXA_REQUEST_TIMEOUT_SECONDS:-120}
+    ports:
+      - "127.0.0.1:${MATXA_ADAPTER_HOST_PORT:-8012}:8002"
+    depends_on:
+      matxa-backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8002/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
   open-webui:
     volumes:
       - /opt/ai/openwebui-data:/app/backend/data

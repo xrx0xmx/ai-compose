@@ -1,0 +1,48 @@
+diff --git a/app.py b/app.py
+index 0e06211..cb24b96 100644
+--- a/app.py
++++ b/app.py
+@@ -12,6 +12,8 @@ import wave
+ from time import perf_counter
+ import logging
+ from fastapi import Request
+ from fastapi.responses import JSONResponse
+ 
++logger = logging.getLogger("uvicorn.error")
++
+ 
+ app = FastAPI()
+@@ -26,13 +28,23 @@ CONFIG_PATH = "config.yaml"
+ SPEAKER_ID_DICT = "spk_to_id_3.json"
+ 
+ # Initialize models
++provider_setting = os.environ.get("MATXA_EXECUTION_PROVIDER", "auto").strip().lower()
++if provider_setting not in {"auto", "cpu", "cuda"}:
++    raise ValueError("MATXA_EXECUTION_PROVIDER must be one of: auto, cpu, cuda")
++
+ sess_options = onnxruntime.SessionOptions()
+ sess_options.intra_op_num_threads = 1
+ sess_options.inter_op_num_threads = 1
+ 
+-device = "cpu"
++available_providers = set(onnxruntime.get_available_providers())
++
++if provider_setting == "cuda":
++    if "CUDAExecutionProvider" not in available_providers:
++        raise RuntimeError("CUDAExecutionProvider requested but not available in onnxruntime")
++    providers = [("CUDAExecutionProvider", {"cudnn_conv_algo_search": "DEFAULT"}), "CPUExecutionProvider"]
++elif provider_setting == "auto" and "CUDAExecutionProvider" in available_providers:
++    providers = [("CUDAExecutionProvider", {"cudnn_conv_algo_search": "DEFAULT"}), "CPUExecutionProvider"]
++else:
++    providers = ["CPUExecutionProvider"]
+ 
+-if device == "cuda":
+-    print("loading in GPU")
+-    providers = [("CUDAExecutionProvider", {"cudnn_conv_algo_search": "DEFAULT"}), "CPUExecutionProvider"]
+-else:
+-    print("loading in CPU")
+-    providers = ["CPUExecutionProvider"]
++logger.info("Matxa execution providers: %s", providers)
+ 
+ model_matcha_mel_all = onnxruntime.InferenceSession(
+     str(MODEL_PATH_MATCHA_E2E),
