@@ -1,4 +1,4 @@
-FROM python:3.10.12-slim
+FROM nvidia/cuda:12.6.3-cudnn9-runtime-ubuntu22.04
 
 ARG MATXA_UPSTREAM_REPO=https://github.com/langtech-bsc/minimal-tts-api.git
 ARG MATXA_UPSTREAM_REF=b0084b203100b83ace8dfd2fde09fd18eb875e18
@@ -8,7 +8,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HF_HOME=/cache/huggingface \
     HUGGINGFACE_HUB_CACHE=/cache/huggingface/hub \
-    MATXA_MODEL_DIR=/cache/models
+    MATXA_MODEL_DIR=/cache/models \
+    DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     autoconf \
@@ -21,6 +22,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libtool \
     patch \
     pkg-config \
+    python3 \
+    python3-dev \
+    python3-pip \
+  && ln -sf /usr/bin/python3 /usr/local/bin/python3 \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/build
