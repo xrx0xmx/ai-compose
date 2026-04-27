@@ -255,7 +255,7 @@ cmd_test_tts() {
   local tmp_wav
   local payload
   tmp_wav="$(mktemp /tmp/matxa-tts.XXXXXX.wav)"
-  trap 'rm -f "$tmp_wav"' RETURN
+  trap 'rm -f "${tmp_wav:-}"' RETURN
 
   payload="$(jq -nc \
     --arg model "$MATXA_TTS_MODEL" \
