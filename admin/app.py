@@ -32,6 +32,7 @@ DOCKER_PROXY_URL = os.environ.get("DOCKER_PROXY_URL", "http://docker-socket-prox
 COMFYUI_INTERNAL_URL = os.environ.get("COMFYUI_INTERNAL_URL", "http://comfyui:8188")
 LITELLM_URL = os.environ.get("LITELLM_URL", "http://litellm:4000")
 LITELLM_KEY = os.environ.get("LITELLM_KEY", "")
+MATXA_ADAPTER_URL = os.environ.get("MATXA_ADAPTER_URL", "http://matxa-adapter:8002")
 
 ALLOWED_CONTAINERS = [
     "comfyui",
@@ -67,6 +68,11 @@ bearer_scheme = HTTPBearer(auto_error=False)
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+
+class TTSSpeechRequest(BaseModel):
+    text: str
+    voice: str
 
 
 def verify_webui_credentials(email: str, password: str) -> Optional[dict]:
@@ -656,6 +662,50 @@ def api_logs(container_name: str, tail: int = 200, user: dict = Depends(get_curr
         return fetch_container_logs(container_name, tail)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# TTS proxy
+# ---------------------------------------------------------------------------
+
+@app.get("/api/tts/voices")
+def tts_voices(user: dict = Depends(get_current_user)) -> dict:
+    try:
+        r = requests.get(f"{MATXA_ADAPTER_URL}/v1/audio/voices", timeout=5)
+        r.raise_for_status()
+        return r.json()
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=503, detail=f"Matxa adapter unavailable: {exc}")
+
+
+@app.post("/api/tts/speech")
+def tts_speech(req: TTSSpeechRequest, user: dict = Depends(get_current_user)) -> Response:
+    payload = {
+        "model": "tts-1",
+        "input": req.text,
+        "voice": req.voice,
+        "response_format": "wav",
+        "speed": 1.0,
+    }
+    try:
+        r = requests.post(
+            f"{MATXA_ADAPTER_URL}/v1/audio/speech",
+            json=payload,
+            timeout=120,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"Matxa adapter request failed: {exc}")
+    if r.status_code >= 400:
+        try:
+            detail = r.json().get("detail", r.text)
+        except ValueError:
+            detail = r.text
+        raise HTTPException(status_code=r.status_code, detail=detail)
+    return Response(
+        content=r.content,
+        media_type="audio/wav",
+        headers={"Content-Disposition": 'attachment; filename="speech.wav"'},
+    )
 
 
 # ---------------------------------------------------------------------------
