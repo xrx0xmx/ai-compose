@@ -36,6 +36,7 @@ OPENWEBUI_URL ?= http://127.0.0.1:3000
 COMFYUI_URL ?= http://127.0.0.1:8188
 ADMIN_URL ?= $(HOST_BASE_URL)/admin
 ALLOW_LEGACY_POSTGRES_PASSWORD ?= 0
+ALLOW_LEGACY_LITELLM_KEY ?= 0
 
 -include Makefile.ops
 -include versions.lock
@@ -162,7 +163,7 @@ prod-preflight-env:
 	    echo "ERROR: variable requerida no definida: $$name"; exit 1; \
 	  fi; \
 	  case "$$value" in \
-	    change_me|cambiaLAclave|change-this-jwt-secret) \
+	    change_me|change-this-jwt-secret) \
 	      echo "ERROR: $$name usa un placeholder inseguro ($$value)"; exit 1 ;; \
 	    changeme_pg) \
 	      if [ "$$name" = "POSTGRES_PASSWORD" ] && [ "$(ALLOW_LEGACY_POSTGRES_PASSWORD)" = "1" ]; then \
@@ -170,12 +171,22 @@ prod-preflight-env:
 	      else \
 	        echo "ERROR: $$name usa un placeholder inseguro ($$value). Si esta instancia ya fue inicializada asi y necesitas un despliegue compatible, usa ALLOW_LEGACY_POSTGRES_PASSWORD=1 de forma temporal."; exit 1; \
 	      fi ;; \
+	    cambiaLAclave) \
+	      if [ "$$name" = "LITELLM_KEY" ] && [ "$(ALLOW_LEGACY_LITELLM_KEY)" = "1" ]; then \
+	        echo "WARN: $$name mantiene placeholder legacy ($$value). No lo rotes aqui hasta corregir primero las plantillas/configs activas de LiteLLM."; \
+	      else \
+	        echo "ERROR: $$name usa un placeholder inseguro ($$value). Si esta instancia sigue acoplada al valor legacy, usa ALLOW_LEGACY_LITELLM_KEY=1 de forma temporal."; exit 1; \
+	      fi ;; \
 	  esac; \
 	}; \
 	check_entropy() { \
 	  name="$$1"; min_len="$$2"; \
 	  eval "value=\$${$$name-}"; \
 	  if [ "$$name" = "POSTGRES_PASSWORD" ] && [ "$$value" = "changeme_pg" ] && [ "$(ALLOW_LEGACY_POSTGRES_PASSWORD)" = "1" ]; then \
+	    echo "WARN: $$name omite validacion de entropia por compatibilidad legacy."; \
+	    return 0; \
+	  fi; \
+	  if [ "$$name" = "LITELLM_KEY" ] && [ "$$value" = "cambiaLAclave" ] && [ "$(ALLOW_LEGACY_LITELLM_KEY)" = "1" ]; then \
 	    echo "WARN: $$name omite validacion de entropia por compatibilidad legacy."; \
 	    return 0; \
 	  fi; \

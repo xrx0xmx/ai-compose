@@ -89,6 +89,15 @@ ALLOW_LEGACY_POSTGRES_PASSWORD=1 make prod-preflight-env
 Usa esta excepción solo si la instancia de Postgres existente ya fue inicializada con `POSTGRES_PASSWORD=changeme_pg`.
 No cambies ese valor en `.env` justo antes de reiniciar: en Postgres ese env var no rota la contraseña real de una base ya creada y puedes desincronizar las apps con la credencial efectiva.
 
+Excepción legacy adicional para LiteLLM:
+
+```bash
+ALLOW_LEGACY_LITELLM_KEY=1 make prod-preflight-env
+```
+
+Úsala solo si la instancia actual todavía depende de `LITELLM_KEY=cambiaLAclave`.
+No rotes esa clave en esta fase de compatibilidad: el proyecto mantiene `cambiaLAclave` en plantillas/configuraciones activas de LiteLLM y cambiar solo `.env` puede desincronizar Open WebUI, admin, switcher y la config efectiva del proxy LLM.
+
 ## Producción (servidor con GPU)
 
 Directorios en el servidor (propiedad de aiservices:aiservices):
@@ -129,7 +138,7 @@ Esto levanta servicios base y crea contenedores de modelos/comfy.
 ```bash
 cp .env .env.backup.$(date +%Y%m%d%H%M%S)
 cp versions.lock versions.lock.backup.$(date +%Y%m%d%H%M%S)
-ALLOW_LEGACY_POSTGRES_PASSWORD=1 make prod-preflight-env
+ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 make prod-preflight-env
 make prod-image-lock-check
 ```
 
@@ -143,15 +152,15 @@ make prod-init
 ### Upgrade canary (automatizado)
 
 ```bash
-ALLOW_LEGACY_POSTGRES_PASSWORD=1 make prod-upgrade-precheck
-ALLOW_LEGACY_POSTGRES_PASSWORD=1 make prod-upgrade-canary
+ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 make prod-upgrade-precheck
+ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 make prod-upgrade-canary
 MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-upgrade-verify
 ```
 
 Atajo todo-en-uno:
 
 ```bash
-ALLOW_LEGACY_POSTGRES_PASSWORD=1 MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-upgrade-promote
+ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-upgrade-promote
 ```
 
 Rollback:
