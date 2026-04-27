@@ -5,12 +5,6 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.prod.yml)
-WEBUI_PROFILE=(--profile webui)
-MODEL_PROFILES=(--profile qwen-fast --profile qwen-quality --profile deepseek --profile qwen-max --profile comfy)
-ALL_PROFILES=(--profile webui --profile qwen-fast --profile qwen-quality --profile deepseek --profile qwen-max --profile comfy)
-BASE_SERVICES=(postgres litellm docker-socket-proxy model-switcher open-webui admin-panel)
-MODEL_SERVICES=(vllm-fast vllm-quality vllm-deepseek vllm-qwen32b comfyui)
-COMPOSE_SERVICES=(postgres litellm docker-socket-proxy model-switcher open-webui admin-panel vllm-fast vllm-quality vllm-deepseek vllm-qwen32b comfyui)
 
 load_file() {
   local file="$1"
@@ -30,8 +24,36 @@ HOST_BASE_URL="${HOST_BASE_URL:-http://127.0.0.1}"
 OPENWEBUI_URL="${OPENWEBUI_URL:-${HOST_BASE_URL}:3000}"
 COMFYUI_URL="${COMFYUI_URL:-${HOST_BASE_URL}:8188}"
 ADMIN_URL="${ADMIN_URL:-${HOST_BASE_URL}/admin}"
+MATXA_PROFILE="${MATXA_PROFILE:-matxa-cuda}"
+MATXA_BACKEND_SERVICE="${MATXA_BACKEND_SERVICE:-}"
+MATXA_TTS_PORT="${MATXA_ADAPTER_HOST_PORT:-8012}"
+MATXA_TTS_URL="${MATXA_TTS_URL:-${HOST_BASE_URL}:${MATXA_TTS_PORT}/v1}"
+MATXA_TTS_MODEL="${MATXA_TTS_MODEL:-tts-1}"
+MATXA_TTS_VOICE="${MATXA_TTS_VOICE:-central-grau}"
+MATXA_TTS_KEY="${MATXA_TTS_KEY:-matxa-local}"
+MATXA_TTS_TEXT="${MATXA_TTS_TEXT:-La seva gerra sembla molt antiga i el viatge fou molt llarg.}"
 MODEL_SWITCHER_DEFAULT="${MODEL_SWITCHER_DEFAULT:-qwen-fast}"
 DEFAULT_TTL="${COMFY_TTL:-45}"
+
+case "$MATXA_PROFILE" in
+  matxa-cuda)
+    MATXA_BACKEND_SERVICE="${MATXA_BACKEND_SERVICE:-matxa-backend-cuda}"
+    ;;
+  matxa-cpu)
+    MATXA_BACKEND_SERVICE="${MATXA_BACKEND_SERVICE:-matxa-backend-cpu}"
+    ;;
+  *)
+    echo "ERROR: MATXA_PROFILE invalido: $MATXA_PROFILE (usa matxa-cuda|matxa-cpu)"
+    exit 1
+    ;;
+esac
+
+WEBUI_PROFILE=(--profile webui --profile "$MATXA_PROFILE")
+MODEL_PROFILES=(--profile qwen-fast --profile qwen-quality --profile deepseek --profile qwen-max --profile comfy --profile "$MATXA_PROFILE")
+ALL_PROFILES=(--profile webui --profile qwen-fast --profile qwen-quality --profile deepseek --profile qwen-max --profile comfy --profile "$MATXA_PROFILE")
+BASE_SERVICES=(postgres litellm docker-socket-proxy model-switcher open-webui admin-panel "$MATXA_BACKEND_SERVICE" matxa-adapter)
+MODEL_SERVICES=(vllm-fast vllm-quality vllm-deepseek vllm-qwen32b comfyui)
+COMPOSE_SERVICES=(postgres litellm docker-socket-proxy model-switcher open-webui admin-panel matxa-backend-cuda matxa-backend-cpu matxa-adapter vllm-fast vllm-quality vllm-deepseek vllm-qwen32b comfyui)
 
 compose() {
   docker compose "${COMPOSE_FILES[@]}" "$@"
@@ -135,7 +157,7 @@ cmd_down() {
 }
 
 cmd_deploy() {
-  compose_webui build admin-panel model-switcher
+  compose_webui build admin-panel model-switcher "$MATXA_BACKEND_SERVICE" matxa-adapter
   cmd_down
   cmd_up
 }
@@ -227,6 +249,44 @@ cmd_test() {
   exit 1
 }
 
+cmd_test_tts() {
+  require_cmds curl jq python3
+
+  local tmp_wav
+  local payload
+  tmp_wav="$(mktemp /tmp/matxa-tts.XXXXXX.wav)"
+  trap 'rm -f "$tmp_wav"' RETURN
+
+  payload="$(jq -nc \
+    --arg model "$MATXA_TTS_MODEL" \
+    --arg input "$MATXA_TTS_TEXT" \
+    --arg voice "$MATXA_TTS_VOICE" \
+    '{model:$model,input:$input,voice:$voice,response_format:"wav",speed:1.0}')"
+
+  echo "Llamada usada: POST $MATXA_TTS_URL/audio/speech (voice=$MATXA_TTS_VOICE)"
+  curl -fsS "$MATXA_TTS_URL/audio/speech" \
+    -H "Authorization: Bearer $MATXA_TTS_KEY" \
+    -H "Content-Type: application/json" \
+    -d "$payload" \
+    -o "$tmp_wav"
+
+  python3 - "$tmp_wav" <<'PY'
+import sys
+import wave
+
+path = sys.argv[1]
+with wave.open(path, "rb") as wav_file:
+  frames = wav_file.getnframes()
+  rate = wav_file.getframerate()
+  channels = wav_file.getnchannels()
+
+if frames <= 0:
+  raise SystemExit("WAV has no frames")
+
+print(f"OK: Matxa TTS devuelve WAV ({channels}ch, {rate}Hz, {frames} frames)")
+PY
+}
+
 cmd_switch() {
   local model="$1"
   switcher_post "/switch" "{\"model\":\"$model\"}" | jq
@@ -269,6 +329,8 @@ cmd_doctor() {
   http_ok "$OPENWEBUI_URL" "$OPENWEBUI_URL"
   echo "[doctor] admin"
   http_ok "$ADMIN_URL" "$ADMIN_URL"
+  echo "[doctor] matxa tts"
+  cmd_test_tts
   active_mode="$(current_mode)"
   if [[ "$active_mode" == "comfy" ]]; then
     echo "[doctor] comfy"
@@ -281,7 +343,7 @@ cmd_doctor() {
 
 cmd_help() {
   cat <<'HELP'
-Uso: scripts/ops.sh <up|down|deploy|ps|pull|logs|status|test|switch|mode|doctor>
+Uso: scripts/ops.sh <up|down|deploy|ps|pull|logs|status|test|test-tts|switch|mode|doctor>
 HELP
 }
 
@@ -311,6 +373,9 @@ main() {
       ;;
     test)
       cmd_test
+      ;;
+    test-tts)
+      cmd_test_tts
       ;;
     switch)
       [[ -n "${2:-}" ]] || { echo "ERROR: missing model id"; exit 1; }

@@ -18,6 +18,7 @@ help:
 	@echo "  make logs [TARGET=all|servicio|contenedor] [TAIL=200]"
 	@echo "  make status"
 	@echo "  make test"
+	@echo "  make test-tts"
 	@echo "  make switch MODEL=<id-en-/models>"
 	@echo "  make mode MODE=comfy [TTL=45]"
 	@echo "  make mode MODE=llm [MODEL=qwen-fast]"
@@ -44,6 +45,8 @@ status:  ; @$(OPS_SCRIPT) status
 
 test:    ; @$(OPS_SCRIPT) test
 
+test-tts: ; @$(OPS_SCRIPT) test-tts
+
 doctor:  ; @$(OPS_SCRIPT) doctor
 
 switch:
@@ -54,4 +57,4 @@ mode:
 	@test -n "$(MODE)" || { echo "ERROR: define MODE=llm|comfy"; exit 1; }
 	@$(OPS_SCRIPT) mode "$(MODE)" "$(MODEL)" "$(TTL)"
 
-.PHONY: help up down deploy ps pull logs status test doctor switch mode
+.PHONY: help up down deploy ps pull logs status test test-tts doctor switch mode

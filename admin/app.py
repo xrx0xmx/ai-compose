@@ -39,6 +39,9 @@ ALLOWED_CONTAINERS = [
     "vllm-quality",
     "vllm-deepseek",
     "vllm-qwen32b",
+    "matxa-backend-cuda",
+    "matxa-backend-cpu",
+    "matxa-adapter",
     "litellm",
     "model-switcher",
     "open-webui",
@@ -1811,7 +1814,7 @@ function renderData() {
 }
 
 function getContainerCandidates() {
-  const fixed = ['litellm', 'model-switcher', 'open-webui', 'comfyui'];
+  const fixed = ['litellm', 'model-switcher', 'open-webui', 'comfyui', 'matxa-backend-cuda', 'matxa-backend-cpu', 'matxa-adapter'];
   const dynamic = (aiModelsData?.models || [])
     .map(m => m.container)
     .filter(Boolean);
