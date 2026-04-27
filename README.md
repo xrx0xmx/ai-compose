@@ -79,6 +79,7 @@ make prod-preflight-env
 
 `prod-preflight-env` falla si falta una variable requerida, si hay placeholders inseguros o si la entropía mínima no se cumple.
 `MODEL_SWITCHER_ADMIN_TOKEN` queda deprecado y no se usa en flujo operativo.
+Si `MODEL_SWITCHER_DEFAULT` no está definido, el preflight avisa y asume `qwen-fast` por compatibilidad.
 
 Excepción legacy para despliegues ya inicializados:
 
@@ -97,6 +98,15 @@ ALLOW_LEGACY_LITELLM_KEY=1 make prod-preflight-env
 
 Úsala solo si la instancia actual todavía depende de `LITELLM_KEY=cambiaLAclave`.
 No rotes esa clave en esta fase de compatibilidad: el proyecto mantiene `cambiaLAclave` en plantillas/configuraciones activas de LiteLLM y cambiar solo `.env` puede desincronizar Open WebUI, admin, switcher y la config efectiva del proxy LLM.
+
+Excepción legacy adicional para model-switcher:
+
+```bash
+ALLOW_LEGACY_MODEL_SWITCHER_TOKEN=1 make prod-preflight-env
+```
+
+Úsala solo si el token actual del `model-switcher` es débil o heredado y aún no vas a rotarlo coordinadamente.
+En esta fase de compatibilidad priorizamos no romper producción sobre endurecer inmediatamente ese secreto.
 
 ## Producción (servidor con GPU)
 
@@ -138,7 +148,7 @@ Esto levanta servicios base y crea contenedores de modelos/comfy.
 ```bash
 cp .env .env.backup.$(date +%Y%m%d%H%M%S)
 cp versions.lock versions.lock.backup.$(date +%Y%m%d%H%M%S)
-ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 make prod-preflight-env
+ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 ALLOW_LEGACY_MODEL_SWITCHER_TOKEN=1 make prod-preflight-env
 make prod-image-lock-check
 ```
 
@@ -152,15 +162,15 @@ make prod-init
 ### Upgrade canary (automatizado)
 
 ```bash
-ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 make prod-upgrade-precheck
-ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 make prod-upgrade-canary
+ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 ALLOW_LEGACY_MODEL_SWITCHER_TOKEN=1 make prod-upgrade-precheck
+ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 ALLOW_LEGACY_MODEL_SWITCHER_TOKEN=1 make prod-upgrade-canary
 MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-upgrade-verify
 ```
 
 Atajo todo-en-uno:
 
 ```bash
-ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-upgrade-promote
+ALLOW_LEGACY_POSTGRES_PASSWORD=1 ALLOW_LEGACY_LITELLM_KEY=1 ALLOW_LEGACY_MODEL_SWITCHER_TOKEN=1 MODEL_SWITCHER_TOKEN=tu_token_seguro LITELLM_KEY=<LITELLM_KEY> make prod-upgrade-promote
 ```
 
 Rollback:

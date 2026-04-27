@@ -37,6 +37,7 @@ COMFYUI_URL ?= http://127.0.0.1:8188
 ADMIN_URL ?= $(HOST_BASE_URL)/admin
 ALLOW_LEGACY_POSTGRES_PASSWORD ?= 0
 ALLOW_LEGACY_LITELLM_KEY ?= 0
+ALLOW_LEGACY_MODEL_SWITCHER_TOKEN ?= 0
 
 -include Makefile.ops
 -include versions.lock
@@ -164,7 +165,11 @@ prod-preflight-env:
 	  fi; \
 	  case "$$value" in \
 	    change_me|change-this-jwt-secret) \
-	      echo "ERROR: $$name usa un placeholder inseguro ($$value)"; exit 1 ;; \
+	      if [ "$$name" = "MODEL_SWITCHER_TOKEN" ] && [ "$(ALLOW_LEGACY_MODEL_SWITCHER_TOKEN)" = "1" ]; then \
+	        echo "WARN: $$name mantiene valor legacy ($$value). No lo rotes aqui sin sincronizar primero el token real del servicio en ejecucion."; \
+	      else \
+	        echo "ERROR: $$name usa un placeholder inseguro ($$value)"; exit 1; \
+	      fi ;; \
 	    changeme_pg) \
 	      if [ "$$name" = "POSTGRES_PASSWORD" ] && [ "$(ALLOW_LEGACY_POSTGRES_PASSWORD)" = "1" ]; then \
 	        echo "WARN: $$name mantiene placeholder legacy ($$value). No lo rotes aqui sin sincronizar la credencial real dentro de Postgres."; \
@@ -190,6 +195,10 @@ prod-preflight-env:
 	    echo "WARN: $$name omite validacion de entropia por compatibilidad legacy."; \
 	    return 0; \
 	  fi; \
+	  if [ "$$name" = "MODEL_SWITCHER_TOKEN" ] && [ "$(ALLOW_LEGACY_MODEL_SWITCHER_TOKEN)" = "1" ]; then \
+	    echo "WARN: $$name omite validacion de entropia por compatibilidad legacy."; \
+	    return 0; \
+	  fi; \
 	  len=$$(printf '%s' "$$value" | wc -c | tr -d ' '); \
 	  if [ "$$len" -lt "$$min_len" ]; then \
 	    echo "ERROR: $$name debe tener longitud minima $$min_len (actual=$$len)"; exit 1; \
@@ -207,7 +216,9 @@ prod-preflight-env:
 	check_required POSTGRES_PASSWORD; \
 	check_required LITELLM_KEY; \
 	check_required ADMIN_JWT_SECRET; \
-	check_required MODEL_SWITCHER_DEFAULT; \
+	if [ -z "$${MODEL_SWITCHER_DEFAULT:-}" ]; then \
+	  echo "WARN: MODEL_SWITCHER_DEFAULT no definido; se usara qwen-fast por compatibilidad."; \
+	fi; \
 	if [ -n "$${MODEL_SWITCHER_ADMIN_TOKEN:-}" ]; then \
 	  echo "WARN: MODEL_SWITCHER_ADMIN_TOKEN esta deprecado y se ignora. Usa solo MODEL_SWITCHER_TOKEN"; \
 	fi; \
