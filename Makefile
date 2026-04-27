@@ -57,4 +57,10 @@ mode:
 	@test -n "$(MODE)" || { echo "ERROR: define MODE=llm|comfy"; exit 1; }
 	@$(OPS_SCRIPT) mode "$(MODE)" "$(MODEL)" "$(TTL)"
 
-.PHONY: help up down deploy ps pull logs status test test-tts doctor switch mode
+local-tts-up:
+	docker compose -f docker-compose.yml -f docker-compose.local.yml up -d catotron-cpu matxa-adapter
+
+local-tts-down:
+	docker compose -f docker-compose.yml -f docker-compose.local.yml stop catotron-cpu matxa-adapter
+
+.PHONY: help up down deploy ps pull logs status test test-tts doctor switch mode local-tts-up local-tts-down

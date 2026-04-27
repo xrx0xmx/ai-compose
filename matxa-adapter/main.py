@@ -12,24 +12,27 @@ MATXA_HEALTH_TIMEOUT_SECONDS = float(os.getenv("MATXA_HEALTH_TIMEOUT_SECONDS", "
 DEFAULT_VOICE = os.getenv("MATXA_DEFAULT_VOICE", "central-grau")
 DEFAULT_MODEL = os.getenv("MATXA_DEFAULT_MODEL", "tts-1")
 MAX_INPUT_LENGTH = int(os.getenv("MATXA_MAX_INPUT_LENGTH", "500"))
+BACKEND_STYLE = os.getenv("BACKEND_STYLE", "matxa")  # "matxa" | "catotron"
 
 VOICE_MAP: Dict[str, Dict[str, str]] = {
-    "balear-quim": {"accent": "balear", "voice": "quim", "name": "Quim (Balear)"},
-    "balear-olga": {"accent": "balear", "voice": "olga", "name": "Olga (Balear)"},
-    "central-grau": {"accent": "central", "voice": "grau", "name": "Grau (Central)"},
-    "central-elia": {"accent": "central", "voice": "elia", "name": "Elia (Central)"},
+    "balear-quim": {"accent": "balear", "voice": "quim", "language": "ca-ba", "name": "Quim (Balear)"},
+    "balear-olga": {"accent": "balear", "voice": "olga", "language": "ca-ba", "name": "Olga (Balear)"},
+    "central-grau": {"accent": "central", "voice": "grau", "language": "ca-es", "name": "Grau (Central)"},
+    "central-elia": {"accent": "central", "voice": "elia", "language": "ca-es", "name": "Elia (Central)"},
     "nord-occidental-pere": {
         "accent": "nord-occidental",
         "voice": "pere",
+        "language": "ca-nw",
         "name": "Pere (Nord-occidental)",
     },
     "nord-occidental-emma": {
         "accent": "nord-occidental",
         "voice": "emma",
+        "language": "ca-nw",
         "name": "Emma (Nord-occidental)",
     },
-    "valencia-lluc": {"accent": "valencia", "voice": "lluc", "name": "Lluc (Valencià)"},
-    "valencia-gina": {"accent": "valencia", "voice": "gina", "name": "Gina (Valencià)"},
+    "valencia-lluc": {"accent": "valencia", "voice": "lluc", "language": "ca-va", "name": "Lluc (Valencià)"},
+    "valencia-gina": {"accent": "valencia", "voice": "gina", "language": "ca-va", "name": "Gina (Valencià)"},
 }
 
 app = FastAPI(title="Matxa OpenAI Adapter", version="1.0.0")
@@ -104,11 +107,12 @@ def probe_backend() -> None:
             timeout=MATXA_HEALTH_TIMEOUT_SECONDS,
         )
     except requests.RequestException as exc:
-        raise HTTPException(status_code=503, detail=f"Matxa backend not ready: {exc}") from exc
+        raise HTTPException(status_code=503, detail=f"Backend not ready: {exc}") from exc
 
-    if response.status_code >= 400:
+    # catotron-cpu may not expose /health — treat 404 as "up"
+    if response.status_code >= 400 and response.status_code != 404:
         detail = detail_from_response(response)
-        raise HTTPException(status_code=503, detail=f"Matxa backend not ready: {detail}")
+        raise HTTPException(status_code=503, detail=f"Backend not ready: {detail}")
 
 
 @app.get("/health")
@@ -148,13 +152,22 @@ def create_speech(request: OpenAISpeechRequest) -> Response:
     speed = validate_speed(request.speed)
     validate_response_format(request.response_format)
 
-    payload = {
-        "text": input_text,
-        "voice": voice["voice"],
-        "accent": voice["accent"],
-        "type": "text",
-        "length_scale": round(1.0 / speed, 4),
-    }
+    if BACKEND_STYLE == "catotron":
+        payload = {
+            "text": input_text,
+            "voice": voice["voice"],
+            "language": voice["language"],
+            "type": "text",
+            "speech_speed": speed,
+        }
+    else:
+        payload = {
+            "text": input_text,
+            "voice": voice["voice"],
+            "accent": voice["accent"],
+            "type": "text",
+            "length_scale": round(1.0 / speed, 4),
+        }
 
     try:
         backend_response = requests.post(

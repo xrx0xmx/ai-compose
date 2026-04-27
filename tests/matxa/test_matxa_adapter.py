@@ -57,7 +57,7 @@ def test_ready_returns_503_when_backend_is_down(monkeypatch) -> None:
     response = client.get("/ready")
 
     assert response.status_code == 503
-    assert "Matxa backend not ready" in response.json()["detail"]
+    assert "Backend not ready" in response.json()["detail"]
 
 
 def test_list_voices_returns_expected_catalog() -> None:

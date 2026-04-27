@@ -33,3 +33,33 @@ services:
       - "127.0.0.1:3000:8080"
     volumes:
       - ./data/openwebui:/app/backend/data
+
+  catotron-cpu:
+    image: projecteaina/tts-api:latest
+    container_name: catotron-cpu
+    ports:
+      - "127.0.0.1:8013:8000"
+    restart: unless-stopped
+
+  matxa-adapter:
+    build:
+      context: .
+      dockerfile: matxa-adapter/Dockerfile
+    container_name: matxa-adapter
+    environment:
+      - MATXA_BACKEND_URL=http://catotron-cpu:8000
+      - BACKEND_STYLE=catotron
+      - MATXA_DEFAULT_VOICE=central-grau
+      - MATXA_REQUEST_TIMEOUT_SECONDS=120
+      - MATXA_HEALTH_TIMEOUT_SECONDS=2.0
+    ports:
+      - "127.0.0.1:8012:8002"
+    depends_on:
+      - catotron-cpu
+    restart: unless-stopped
+
+  admin-panel:
+    environment:
+      - MATXA_ADAPTER_URL=http://matxa-adapter:8002
+    depends_on:
+      - matxa-adapter
