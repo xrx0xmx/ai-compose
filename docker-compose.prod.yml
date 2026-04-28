@@ -277,6 +277,7 @@ services:
       context: .
       dockerfile: matxa-backend/Dockerfile
       args:
+        MATXA_CUDA_IMAGE: ${MATXA_CUDA_IMAGE:-nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04}
         MATXA_UPSTREAM_REF: ${MATXA_UPSTREAM_REF:-b0084b203100b83ace8dfd2fde09fd18eb875e18}
         MATXA_RUNTIME: cuda
     container_name: matxa-backend-cuda

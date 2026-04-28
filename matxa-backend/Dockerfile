@@ -1,4 +1,5 @@
-FROM nvidia/cuda:12.6.3-cudnn9-runtime-ubuntu22.04
+ARG MATXA_CUDA_IMAGE=nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
+FROM ${MATXA_CUDA_IMAGE}
 
 ARG MATXA_UPSTREAM_REPO=https://github.com/langtech-bsc/minimal-tts-api.git
 ARG MATXA_UPSTREAM_REF=b0084b203100b83ace8dfd2fde09fd18eb875e18

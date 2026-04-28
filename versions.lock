@@ -6,6 +6,8 @@ LITELLM_IMAGE=litellm/litellm:latest
 OPENWEBUI_IMAGE=ghcr.io/open-webui/open-webui:main
 DOCKER_SOCKET_PROXY_IMAGE=tecnativa/docker-socket-proxy:0.1.1
 
+MATXA_CUDA_IMAGE=nvidia/cuda:12.6.3-cudnn-runtime-ubuntu22.04
+
 VLLM_IMAGE_FAST=vllm/vllm-openai:v0.5.4
 VLLM_IMAGE_QUALITY=vllm/vllm-openai:v0.5.4
 VLLM_IMAGE_DEEPSEEK=vllm/vllm-openai:v0.6.6.post1
