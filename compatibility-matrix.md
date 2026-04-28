@@ -10,6 +10,7 @@ Track model/runtime compatibility outcomes for this stack (`LiteLLM + vLLM + mod
 | `qwen-fast` | `Qwen/Qwen2.5-7B-Instruct-AWQ` | AWQ | `vllm-fast` | Compatible |
 | `qwen-quality` | `Qwen/Qwen2.5-14B-Instruct-AWQ` | AWQ | `vllm-quality` | Compatible |
 | `deepseek` | `casperhansen/deepseek-r1-distill-qwen-14b-awq` | AWQ | `vllm-deepseek` | Compatible |
+| `deepseek-r1-32b-awq` | `casperhansen/deepseek-r1-distill-qwen-32b-awq` | AWQ | `vllm-deepseek32b` | Planned |
 | `qwen-max` | `Qwen/Qwen2.5-32B-Instruct-AWQ` | AWQ | `vllm-qwen32b` | Compatible (VRAM dependent) |
 
 ## Dynamic Cases Observed

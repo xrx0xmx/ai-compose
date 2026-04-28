@@ -11,6 +11,7 @@ COPY control/entrypoint.sh /app/entrypoint.sh
 COPY litellm-config.qwen-fast.yml /opt/model-configs/qwen-fast.yml
 COPY litellm-config.qwen-quality.yml /opt/model-configs/qwen-quality.yml
 COPY litellm-config.deepseek.yml /opt/model-configs/deepseek-r1-local.yml
+COPY litellm-config.deepseek-r1-32b-awq.yml /opt/model-configs/deepseek-r1-32b-awq.yml
 COPY litellm-config.qwen-max.yml /opt/model-configs/qwen-max.yml
 
 RUN chmod +x /app/entrypoint.sh

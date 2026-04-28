@@ -46,6 +46,7 @@ make status
 make test
 make test-tts
 make switch MODEL=qwen-fast
+make switch MODEL=deepseek-r1-32b-awq
 make mode MODE=comfy TTL=45
 make mode MODE=llm MODEL=qwen-fast
 make doctor
@@ -218,6 +219,7 @@ Cambiar modelo LLM:
 ```bash
 make switch MODEL=qwen-fast
 make switch MODEL=deepseek
+make switch MODEL=deepseek-r1-32b-awq
 ```
 
 Activar ComfyUI con TTL:

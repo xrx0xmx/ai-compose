@@ -52,6 +52,15 @@ MODELS: Dict[str, Dict[str, Any]] = {
     "litellm_model": "deepseek-r1",
     "requires_api_key": False,
   },
+  "deepseek-r1-32b-awq": {
+    "label": "DeepSeek-R1 32B (AWQ)",
+    "provider": "local-vllm",
+    "kind": "local_vllm",
+    "container": "vllm-deepseek32b",
+    "template": "deepseek-r1-32b-awq.yml",
+    "litellm_model": "deepseek-r1-32b-awq",
+    "requires_api_key": False,
+  },
   "qwen-max": {
     "label": "Qwen 2.5 32B",
     "provider": "local-vllm",
