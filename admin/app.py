@@ -50,7 +50,9 @@ ALLOWED_CONTAINERS = [
 MODEL_INFO = {
     "qwen-fast":    {"label": "Qwen 2.5 7B",   "vram": "~13 GB (55%)", "container": "vllm-fast"},
     "qwen-quality": {"label": "Qwen 2.5 14B",  "vram": "~20 GB (85%)", "container": "vllm-quality"},
-    "deepseek":     {"label": "DeepSeek-R1 14B","vram": "~21 GB (95%)", "container": "vllm-deepseek"},
+    "deepseek-r1-local": {"label": "DeepSeek-R1 14B (Local)","vram": "~21 GB (95%)", "container": "vllm-deepseek"},
+    "deepseek-v4-flash": {"label": "DeepSeek-V4 Flash (API)","vram": "API remota", "container": None},
+    "deepseek-v4-pro":   {"label": "DeepSeek-V4 Pro (API)","vram": "API remota", "container": None},
     "qwen-max":     {"label": "Qwen 2.5 32B",  "vram": "~21 GB (95%)", "container": "vllm-qwen32b"},
 }
 
@@ -472,7 +474,7 @@ def build_ai_models_payload() -> Dict[str, Any]:
     runtime_containers = status_payload.get("containers") or {}
     running_ids = set(status_payload.get("running_models") or [])
     active_model = status_payload.get("active_model")
-    active_mode = status_payload.get("active_mode")
+    active_mode = status_payload.get("active_mode") or "llm"
 
     models: List[Dict[str, Any]] = []
     for model in models_payload.get("models", []):
@@ -532,7 +534,7 @@ def me(user: dict = Depends(get_current_user)):
 @app.get("/api/status")
 def api_status(user: dict = Depends(get_current_user)):
     try:
-        return switcher_get("/mode")
+        return switcher_get("/status")
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
 
@@ -608,12 +610,17 @@ class ModeSwitchBody(BaseModel):
 
 @app.post("/api/mode/switch")
 def api_mode_switch(body: ModeSwitchBody, user: dict = Depends(get_current_user)):
-    payload = {"mode": body.mode, "wait_for_ready": body.wait_for_ready}
-    if body.model:
-        payload["model"] = body.model
-    if body.ttl_minutes is not None:
-        payload["ttl_minutes"] = body.ttl_minutes
+    mode = body.mode.strip().lower()
     try:
+        if mode == "llm":
+            if not body.model:
+                raise HTTPException(status_code=400, detail="Debes indicar un modelo para modo llm")
+            return switcher_post("/switch", {"model": body.model}, timeout=300)
+        payload = {"mode": mode, "wait_for_ready": body.wait_for_ready}
+        if body.model:
+            payload["model"] = body.model
+        if body.ttl_minutes is not None:
+            payload["ttl_minutes"] = body.ttl_minutes
         return switcher_post("/mode/switch", payload, timeout=300)
     except requests.HTTPError as e:
         raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
@@ -1031,7 +1038,9 @@ HTML = r"""<!DOCTYPE html>
 const MODEL_INFO = {
   'qwen-fast':    {label:'Qwen 2.5 7B',     vram:'~13 GB (55%)'},
   'qwen-quality': {label:'Qwen 2.5 14B',    vram:'~20 GB (85%)'},
-  'deepseek':     {label:'DeepSeek-R1 14B', vram:'~21 GB (95%)'},
+  'deepseek-r1-local': {label:'DeepSeek-R1 14B (Local)', vram:'~21 GB (95%)'},
+  'deepseek-v4-flash': {label:'DeepSeek-V4 Flash (API)', vram:'API remota'},
+  'deepseek-v4-pro':   {label:'DeepSeek-V4 Pro (API)', vram:'API remota'},
   'qwen-max':     {label:'Qwen 2.5 32B',    vram:'~21 GB (95%)'},
 };
 
@@ -1624,6 +1633,9 @@ function readableModelName(modelId) {
 }
 
 function readableModelMeta(model) {
+  if (model.label && model.label !== model.id) {
+    return model.label;
+  }
   const info = MODEL_INFO[model.id] || {};
   const parts = [];
   if (info.vram) parts.push(info.vram);

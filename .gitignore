@@ -7,3 +7,6 @@ artifacts/
 # Python cache
 __pycache__/
 *.pyc
+
+# Git worktrees
+.claude/worktrees/
