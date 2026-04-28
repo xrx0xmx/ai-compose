@@ -51,9 +51,9 @@ esac
 WEBUI_PROFILE=(--profile webui --profile "$MATXA_PROFILE")
 MODEL_PROFILES=(--profile qwen-fast --profile qwen-quality --profile deepseek --profile qwen-max --profile comfy --profile "$MATXA_PROFILE")
 ALL_PROFILES=(--profile webui --profile qwen-fast --profile qwen-quality --profile deepseek --profile qwen-max --profile comfy --profile "$MATXA_PROFILE")
-BASE_SERVICES=(postgres litellm docker-socket-proxy model-switcher open-webui admin-panel "$MATXA_BACKEND_SERVICE" matxa-adapter)
+BASE_SERVICES=(postgres litellm docker-socket-proxy model-switcher open-webui admin-panel "$MATXA_BACKEND_SERVICE" catotron-cpu matxa-adapter)
 MODEL_SERVICES=(vllm-fast vllm-quality vllm-deepseek vllm-qwen32b comfyui)
-COMPOSE_SERVICES=(postgres litellm docker-socket-proxy model-switcher open-webui admin-panel matxa-backend-cuda matxa-backend-cpu matxa-adapter vllm-fast vllm-quality vllm-deepseek vllm-qwen32b comfyui)
+COMPOSE_SERVICES=(postgres litellm docker-socket-proxy model-switcher open-webui admin-panel matxa-backend-cuda matxa-backend-cpu catotron-cpu matxa-adapter vllm-fast vllm-quality vllm-deepseek vllm-qwen32b comfyui)
 
 compose() {
   docker compose "${COMPOSE_FILES[@]}" "$@"
