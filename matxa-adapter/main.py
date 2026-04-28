@@ -6,31 +6,32 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
-MATXA_BACKEND_URL = os.getenv("MATXA_BACKEND_URL", "http://matxa-backend:8000").rstrip("/")
+MATXA_BACKEND_URL = os.getenv("MATXA_BACKEND_URL", "").rstrip("/")
+CATOTRON_BACKEND_URL = os.getenv("CATOTRON_BACKEND_URL", "").rstrip("/")
 MATXA_REQUEST_TIMEOUT_SECONDS = int(os.getenv("MATXA_REQUEST_TIMEOUT_SECONDS", "120"))
 MATXA_HEALTH_TIMEOUT_SECONDS = float(os.getenv("MATXA_HEALTH_TIMEOUT_SECONDS", "1.0"))
 DEFAULT_VOICE = os.getenv("MATXA_DEFAULT_VOICE", "central-grau")
-DEFAULT_MODEL = os.getenv("MATXA_DEFAULT_MODEL", "tts-1")
 MAX_INPUT_LENGTH = int(os.getenv("MATXA_MAX_INPUT_LENGTH", "500"))
 
 VOICE_MAP: Dict[str, Dict[str, str]] = {
-    "balear-quim": {"accent": "balear", "voice": "quim", "name": "Quim (Balear)"},
-    "balear-olga": {"accent": "balear", "voice": "olga", "name": "Olga (Balear)"},
-    "central-grau": {"accent": "central", "voice": "grau", "name": "Grau (Central)"},
-    "central-elia": {"accent": "central", "voice": "elia", "name": "Elia (Central)"},
-    "nord-occidental-pere": {
-        "accent": "nord-occidental",
-        "voice": "pere",
-        "name": "Pere (Nord-occidental)",
-    },
-    "nord-occidental-emma": {
-        "accent": "nord-occidental",
-        "voice": "emma",
-        "name": "Emma (Nord-occidental)",
-    },
-    "valencia-lluc": {"accent": "valencia", "voice": "lluc", "name": "Lluc (Valencià)"},
-    "valencia-gina": {"accent": "valencia", "voice": "gina", "name": "Gina (Valencià)"},
+    "balear-quim":          {"accent": "balear",          "voice": "quim", "language": "ca-ba", "name": "Quim (Balear)"},
+    "balear-olga":          {"accent": "balear",          "voice": "olga", "language": "ca-ba", "name": "Olga (Balear)"},
+    "central-grau":         {"accent": "central",         "voice": "grau", "language": "ca-es", "name": "Grau (Central)"},
+    "central-elia":         {"accent": "central",         "voice": "elia", "language": "ca-es", "name": "Elia (Central)"},
+    "nord-occidental-pere": {"accent": "nord-occidental", "voice": "pere", "language": "ca-nw", "name": "Pere (Nord-occidental)"},
+    "nord-occidental-emma": {"accent": "nord-occidental", "voice": "emma", "language": "ca-nw", "name": "Emma (Nord-occidental)"},
+    "valencia-lluc":        {"accent": "valencia",        "voice": "lluc", "language": "ca-va", "name": "Lluc (Valencià)"},
+    "valencia-gina":        {"accent": "valencia",        "voice": "gina", "language": "ca-va", "name": "Gina (Valencià)"},
 }
+
+# Registry: model_id -> {url, style, label}
+BACKENDS: Dict[str, Dict[str, str]] = {}
+if MATXA_BACKEND_URL:
+    BACKENDS["tts-1"] = {"url": MATXA_BACKEND_URL, "style": "matxa", "label": "Matxa TTS"}
+if CATOTRON_BACKEND_URL:
+    BACKENDS["tts-catotron"] = {"url": CATOTRON_BACKEND_URL, "style": "catotron", "label": "Catotron"}
+
+DEFAULT_MODEL = next(iter(BACKENDS), "tts-1")
 
 app = FastAPI(title="Matxa OpenAI Adapter", version="1.0.0")
 
@@ -79,11 +80,10 @@ def validate_speed(speed: float | None) -> float:
     return value
 
 
-def validate_response_format(response_format: str | None) -> str:
+def validate_response_format(response_format: str | None) -> None:
     normalized = (response_format or "wav").strip().lower()
     if normalized not in {"wav", "wave"}:
         raise HTTPException(status_code=400, detail="Only wav response_format is supported")
-    return "wav"
 
 
 def validate_input(input_text: str) -> str:
@@ -97,29 +97,27 @@ def validate_input(input_text: str) -> str:
     return input_text
 
 
-def probe_backend() -> None:
+def probe_backend(url: str) -> None:
     try:
-        response = requests.get(
-            f"{MATXA_BACKEND_URL}/health",
-            timeout=MATXA_HEALTH_TIMEOUT_SECONDS,
-        )
+        response = requests.get(f"{url}/health", timeout=MATXA_HEALTH_TIMEOUT_SECONDS)
     except requests.RequestException as exc:
-        raise HTTPException(status_code=503, detail=f"Matxa backend not ready: {exc}") from exc
-
-    if response.status_code >= 400:
+        raise HTTPException(status_code=503, detail=f"Backend not ready: {exc}") from exc
+    # catotron-cpu may not expose /health — treat 404 as "up"
+    if response.status_code >= 400 and response.status_code != 404:
         detail = detail_from_response(response)
-        raise HTTPException(status_code=503, detail=f"Matxa backend not ready: {detail}")
+        raise HTTPException(status_code=503, detail=f"Backend not ready: {detail}")
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "backend": MATXA_BACKEND_URL}
+def health() -> dict:
+    return {"status": "ok", "backends": {k: v["url"] for k, v in BACKENDS.items()}}
 
 
 @app.get("/ready")
-def ready() -> dict[str, str]:
-    probe_backend()
-    return {"status": "ok", "backend": MATXA_BACKEND_URL}
+def ready() -> dict:
+    for config in BACKENDS.values():
+        probe_backend(config["url"])
+    return {"status": "ok", "backends": {k: v["url"] for k, v in BACKENDS.items()}}
 
 
 @app.get("/v1/audio/voices")
@@ -128,15 +126,12 @@ def list_voices() -> dict[str, list[dict[str, str]]]:
 
 
 @app.get("/v1/models")
-def list_models() -> dict[str, object]:
+def list_models() -> dict:
     return {
         "object": "list",
         "data": [
-            {
-                "id": DEFAULT_MODEL,
-                "object": "model",
-                "owned_by": "matxa-adapter",
-            }
+            {"id": model_id, "object": "model", "owned_by": "matxa-adapter", "label": config["label"]}
+            for model_id, config in BACKENDS.items()
         ],
     }
 
@@ -148,22 +143,39 @@ def create_speech(request: OpenAISpeechRequest) -> Response:
     speed = validate_speed(request.speed)
     validate_response_format(request.response_format)
 
-    payload = {
-        "text": input_text,
-        "voice": voice["voice"],
-        "accent": voice["accent"],
-        "type": "text",
-        "length_scale": round(1.0 / speed, 4),
-    }
+    model_id = (request.model or DEFAULT_MODEL).strip()
+    if model_id not in BACKENDS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown model '{model_id}'. Available: {', '.join(BACKENDS)}",
+        )
+    backend = BACKENDS[model_id]
+
+    if backend["style"] == "catotron":
+        payload = {
+            "text": input_text,
+            "voice": voice["voice"],
+            "language": voice["language"],
+            "type": "text",
+            "speech_speed": speed,
+        }
+    else:
+        payload = {
+            "text": input_text,
+            "voice": voice["voice"],
+            "accent": voice["accent"],
+            "type": "text",
+            "length_scale": round(1.0 / speed, 4),
+        }
 
     try:
         backend_response = requests.post(
-            f"{MATXA_BACKEND_URL}/api/tts",
+            f"{backend['url']}/api/tts",
             json=payload,
             timeout=MATXA_REQUEST_TIMEOUT_SECONDS,
         )
     except requests.RequestException as exc:
-        raise HTTPException(status_code=502, detail=f"Matxa backend request failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"Backend request failed: {exc}") from exc
 
     if backend_response.status_code >= 400:
         detail = detail_from_response(backend_response)
@@ -172,8 +184,7 @@ def create_speech(request: OpenAISpeechRequest) -> Response:
 
     headers = {
         "Content-Disposition": backend_response.headers.get(
-            "Content-Disposition",
-            'inline; filename="speech.wav"',
+            "Content-Disposition", 'inline; filename="speech.wav"'
         )
     }
     media_type = backend_response.headers.get("Content-Type", "audio/wav")
