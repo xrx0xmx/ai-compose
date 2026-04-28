@@ -80,11 +80,10 @@ def validate_speed(speed: float | None) -> float:
     return value
 
 
-def validate_response_format(response_format: str | None) -> str:
+def validate_response_format(response_format: str | None) -> None:
     normalized = (response_format or "wav").strip().lower()
     if normalized not in {"wav", "wave"}:
         raise HTTPException(status_code=400, detail="Only wav response_format is supported")
-    return "wav"
 
 
 def validate_input(input_text: str) -> str:
