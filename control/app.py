@@ -24,30 +24,67 @@ LITELLM_VERIFY_TIMEOUT_SECONDS = int(os.getenv("MODEL_SWITCHER_LITELLM_VERIFY_TI
 ACTIVE_CONFIG = os.path.join(CONFIG_DIR, "active.yml")
 ACTIVE_MODEL_FILE = os.path.join(CONFIG_DIR, "active.model")
 
-MODELS: Dict[str, Dict[str, str]] = {
+MODELS: Dict[str, Dict[str, Any]] = {
   "qwen-fast": {
+    "label": "Qwen 2.5 7B",
+    "provider": "local-vllm",
+    "kind": "local_vllm",
     "container": "vllm-fast",
     "template": "qwen-fast.yml",
     "litellm_model": "qwen-fast",
+    "requires_api_key": False,
   },
   "qwen-quality": {
+    "label": "Qwen 2.5 14B",
+    "provider": "local-vllm",
+    "kind": "local_vllm",
     "container": "vllm-quality",
     "template": "qwen-quality.yml",
     "litellm_model": "qwen-quality",
+    "requires_api_key": False,
   },
-  "deepseek": {
+  "deepseek-r1-local": {
+    "label": "DeepSeek-R1 14B (Local)",
+    "provider": "local-vllm",
+    "kind": "local_vllm",
     "container": "vllm-deepseek",
-    "template": "deepseek.yml",
+    "template": "deepseek-r1-local.yml",
     "litellm_model": "deepseek-r1",
+    "requires_api_key": False,
   },
   "qwen-max": {
+    "label": "Qwen 2.5 32B",
+    "provider": "local-vllm",
+    "kind": "local_vllm",
     "container": "vllm-qwen32b",
     "template": "qwen-max.yml",
     "litellm_model": "qwen-max",
+    "requires_api_key": False,
+  },
+  "deepseek-v4-flash": {
+    "label": "DeepSeek-V4 Flash",
+    "provider": "deepseek",
+    "kind": "remote_openai_compatible",
+    "template": "deepseek-v4-flash.yml",
+    "litellm_model": "deepseek-v4-flash",
+    "requires_api_key": True,
+    "api_key_env": "DEEPSEEK_API_KEY",
+  },
+  "deepseek-v4-pro": {
+    "label": "DeepSeek-V4 Pro",
+    "provider": "deepseek",
+    "kind": "remote_openai_compatible",
+    "template": "deepseek-v4-pro.yml",
+    "litellm_model": "deepseek-v4-pro",
+    "requires_api_key": True,
+    "api_key_env": "DEEPSEEK_API_KEY",
   },
 }
 
 LITELLM_CONTAINER = "litellm"
+MODEL_ALIASES: Dict[str, str] = {
+  "deepseek": "deepseek-r1-local",
+}
 
 app = FastAPI(title="AI Model Switcher", version="2.1.0")
 
@@ -59,6 +96,11 @@ LAST_SWITCH_AT: Optional[str] = None
 
 class SwitchRequest(BaseModel):
   model: str
+
+
+class ModeSwitchRequest(BaseModel):
+  mode: str
+  model: Optional[str] = None
 
 
 def utc_now() -> str:
@@ -155,7 +197,22 @@ def active_model() -> Optional[str]:
   if value is None:
     return None
   current = value.strip()
+  if current in MODEL_ALIASES:
+    current = MODEL_ALIASES[current]
   return current if current in MODELS else None
+
+
+def model_kind(model: Optional[str]) -> Optional[str]:
+  if not model or model not in MODELS:
+    return None
+  return str(MODELS[model].get("kind") or "")
+
+
+def local_model_ids() -> List[str]:
+  return [
+    model_id for model_id, meta in MODELS.items()
+    if meta.get("kind") == "local_vllm" and meta.get("container")
+  ]
 
 
 def ensure_active_config(model: str) -> None:
@@ -288,7 +345,8 @@ def status_payload() -> Dict[str, Any]:
   running_models: List[str] = []
   containers: Dict[str, Any] = {}
 
-  for model_id, meta in MODELS.items():
+  for model_id in local_model_ids():
+    meta = MODELS[model_id]
     try:
       snapshot = state_snapshot(meta["container"])
     except RuntimeError as exc:
@@ -318,6 +376,11 @@ def status_payload() -> Dict[str, Any]:
   runtime = runtime_state()
 
   return {
+    "mode": {
+      "active": "llm",
+      "lease": None,
+    },
+    "active_mode": "llm",
     "running_models": running_models,
     "active_model": active_model(),
     "active_config": ACTIVE_CONFIG if os.path.exists(ACTIVE_CONFIG) else None,
@@ -373,13 +436,15 @@ def ready() -> Dict[str, str]:
   payload = status_payload()
   running = running_models_from_status(payload)
   active = payload.get("active_model")
+  active_kind = model_kind(active)
 
-  if len(running) != 1:
-    raise HTTPException(status_code=503, detail="expected exactly one running model")
   if not active:
     raise HTTPException(status_code=503, detail="no active model configured")
-  if running[0] != active:
-    raise HTTPException(status_code=503, detail="active model does not match running model")
+  if active_kind == "local_vllm":
+    if len(running) != 1:
+      raise HTTPException(status_code=503, detail="expected exactly one running local model")
+    if running[0] != active:
+      raise HTTPException(status_code=503, detail="active model does not match running model")
 
   return {"status": "ready", "active_model": active}
 
@@ -390,12 +455,28 @@ def models() -> Dict[str, Any]:
     "models": [
       {
         "id": model_id,
-        "container": meta["container"],
+        "label": meta.get("label", model_id),
+        "provider": meta.get("provider", "unknown"),
+        "kind": meta.get("kind", "local_vllm"),
+        "container": meta.get("container"),
         "template": meta["template"],
         "litellm_model": meta["litellm_model"],
+        "requires_api_key": bool(meta.get("requires_api_key", False)),
       }
       for model_id, meta in MODELS.items()
     ]
+  }
+
+
+@app.get("/mode", dependencies=[Depends(require_token)])
+def mode_status() -> Dict[str, Any]:
+  return {
+    "mode": {
+      "active": "llm",
+      "lease": None,
+    },
+    "active_mode": "llm",
+    "active_model": active_model(),
   }
 
 
@@ -406,7 +487,8 @@ def status() -> Dict[str, Any]:
 
 @app.post("/switch", dependencies=[Depends(require_token)])
 def switch(req: SwitchRequest) -> Dict[str, Any]:
-  model = req.model.strip()
+  requested_model = req.model.strip()
+  model = MODEL_ALIASES.get(requested_model, requested_model)
   if model not in MODELS:
     raise HTTPException(status_code=400, detail="unknown model")
 
@@ -425,16 +507,23 @@ def switch(req: SwitchRequest) -> Dict[str, Any]:
   disruptive_started = False
 
   try:
-    target_container = MODELS[model]["container"]
-    if container_json(target_container) is None:
-      raise HTTPException(
-        status_code=412,
-        detail=(
-          f"target container is not created: {target_container}. "
-          "Run make prod-bootstrap-models first."
-        ),
-      )
-    add_step(steps, "preflight", True, f"target container exists: {target_container}")
+    target_kind = str(MODELS[model].get("kind") or "")
+    target_container = str(MODELS[model].get("container") or "")
+    if target_kind == "local_vllm":
+      if container_json(target_container) is None:
+        raise HTTPException(
+          status_code=412,
+          detail=(
+            f"target container is not created: {target_container}. "
+            "Run make prod-bootstrap-models first."
+          ),
+        )
+      add_step(steps, "preflight", True, f"target container exists: {target_container}")
+    else:
+      required_key = str(MODELS[model].get("api_key_env") or "")
+      if required_key and not os.getenv(required_key):
+        raise HTTPException(status_code=412, detail=f"missing required env var: {required_key}")
+      add_step(steps, "preflight", True, f"remote model checks passed: {model}")
 
     if from_model == model and len(running_before) == 1:
       add_step(steps, "noop", True, f"model '{model}' is already active")
@@ -452,15 +541,17 @@ def switch(req: SwitchRequest) -> Dict[str, Any]:
     disruptive_started = True
     add_step(steps, "stop_litellm", True, "litellm stopped")
 
-    for meta in MODELS.values():
-      container_stop(meta["container"])
+    for local_model_id in local_model_ids():
+      container_name = MODELS[local_model_id]["container"]
+      container_stop(container_name)
     add_step(steps, "stop_models", True, "all vllm containers stopped")
 
-    container_start(target_container)
-    add_step(steps, "start_target", True, f"started {target_container}")
+    if target_kind == "local_vllm":
+      container_start(target_container)
+      add_step(steps, "start_target", True, f"started {target_container}")
 
-    wait_container_ready(target_container, HEALTH_TIMEOUT_SECONDS)
-    add_step(steps, "wait_target", True, f"{target_container} is ready")
+      wait_container_ready(target_container, HEALTH_TIMEOUT_SECONDS)
+      add_step(steps, "wait_target", True, f"{target_container} is ready")
 
     ensure_active_config(model)
     add_step(steps, "activate_config", True, f"active config set to {model}")
@@ -496,17 +587,18 @@ def switch(req: SwitchRequest) -> Dict[str, Any]:
         restore_active_files(previous_config, previous_model_value)
         add_step(steps, "rollback_restore_config", True, "active config restored")
 
-        for meta in MODELS.values():
-          container_stop(meta["container"])
+        for local_model_id in local_model_ids():
+          container_stop(MODELS[local_model_id]["container"])
         add_step(steps, "rollback_stop_models", True, "all vllm containers stopped")
 
-        rollback_container = MODELS[from_model]["container"]
-        if container_json(rollback_container) is None:
-          raise RuntimeError(f"rollback container missing: {rollback_container}")
+        if MODELS[from_model].get("kind") == "local_vllm":
+          rollback_container = MODELS[from_model]["container"]
+          if container_json(rollback_container) is None:
+            raise RuntimeError(f"rollback container missing: {rollback_container}")
 
-        container_start(rollback_container)
-        wait_container_ready(rollback_container, HEALTH_TIMEOUT_SECONDS)
-        add_step(steps, "rollback_start_previous", True, f"restored {from_model}")
+          container_start(rollback_container)
+          wait_container_ready(rollback_container, HEALTH_TIMEOUT_SECONDS)
+          add_step(steps, "rollback_start_previous", True, f"restored {from_model}")
 
         container_start(LITELLM_CONTAINER)
         rollback_litellm_model = MODELS[from_model]["litellm_model"]
@@ -546,6 +638,24 @@ def switch(req: SwitchRequest) -> Dict[str, Any]:
 
 @app.post("/stop", dependencies=[Depends(require_token)])
 def stop() -> Dict[str, Any]:
-  for meta in MODELS.values():
-    container_stop(meta["container"])
+  for local_model_id in local_model_ids():
+    container_stop(MODELS[local_model_id]["container"])
   return status_payload()
+
+
+@app.post("/mode/switch", dependencies=[Depends(require_token)])
+def mode_switch(req: ModeSwitchRequest) -> Dict[str, Any]:
+  mode = req.mode.strip().lower()
+  if mode != "llm":
+    raise HTTPException(status_code=400, detail="only llm mode is supported by this switcher")
+  if not req.model:
+    raise HTTPException(status_code=400, detail="model is required for llm mode")
+  return switch(SwitchRequest(model=req.model))
+
+
+@app.post("/mode/release", dependencies=[Depends(require_token)])
+def mode_release() -> Dict[str, Any]:
+  current = active_model() or DEFAULT_MODEL
+  if current not in MODELS:
+    raise HTTPException(status_code=400, detail="no valid active model to restore")
+  return switch(SwitchRequest(model=current))

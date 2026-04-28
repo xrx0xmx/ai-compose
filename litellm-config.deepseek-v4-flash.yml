@@ -1,0 +1,10 @@
+model_list:
+  - model_name: deepseek-v4-flash
+    litellm_params:
+      model: openai/deepseek-v4-flash
+      api_base: os.environ/DEEPSEEK_API_BASE
+      api_key: os.environ/DEEPSEEK_API_KEY
+
+general_settings:
+  master_key: "cambiaLAclave"
+  database_url: "os.environ/DATABASE_URL"
