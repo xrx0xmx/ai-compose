@@ -47,8 +47,7 @@ services:
       dockerfile: matxa-adapter/Dockerfile
     container_name: matxa-adapter
     environment:
-      - MATXA_BACKEND_URL=http://catotron-cpu:8000
-      - BACKEND_STYLE=catotron
+      - CATOTRON_BACKEND_URL=http://catotron-cpu:8000
       - MATXA_DEFAULT_VOICE=central-grau
       - MATXA_REQUEST_TIMEOUT_SECONDS=120
       - MATXA_HEALTH_TIMEOUT_SECONDS=2.0
