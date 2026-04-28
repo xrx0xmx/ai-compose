@@ -1093,6 +1093,12 @@ HTML = r"""<!DOCTYPE html>
 
         <div style="max-width:640px; display:flex; flex-direction:column; gap:16px; margin-top:8px;">
           <div class="form-group" style="margin:0">
+            <label for="tts-model">Motor</label>
+            <select id="tts-model" style="width:100%; background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--text); padding:10px 12px; font-size:.95rem;">
+              <option value="tts-1">Matxa TTS</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin:0">
             <label for="tts-voice">Veu</label>
             <select id="tts-voice" style="width:100%; background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--text); padding:10px 12px; font-size:.95rem;">
               <option value="central-grau">Grau (Central)</option>
@@ -1593,16 +1599,25 @@ function showApp(name) {
 }
 
 async function loadTTSVoices() {
-  const sel = document.getElementById('tts-voice');
-  if (!sel || sel.dataset.loaded) return;
+  const voiceSel = document.getElementById('tts-voice');
+  const modelSel = document.getElementById('tts-model');
+  if (!voiceSel || voiceSel.dataset.loaded) return;
   try {
-    const data = await apiFetch('/api/tts/voices');
-    sel.innerHTML = data.voices.map(v =>
+    const [voiceData, modelData] = await Promise.all([
+      apiFetch('/api/tts/voices'),
+      apiFetch('/api/tts/models'),
+    ]);
+    voiceSel.innerHTML = voiceData.voices.map(v =>
       `<option value="${v.id}">${v.name}</option>`
     ).join('');
-    sel.dataset.loaded = '1';
+    if (modelData && modelData.data && modelData.data.length > 0) {
+      modelSel.innerHTML = modelData.data.map(m =>
+        `<option value="${m.id}">${m.label || m.id}</option>`
+      ).join('');
+    }
+    voiceSel.dataset.loaded = '1';
   } catch (_) {
-    // keep default option
+    // keep default options
   }
 }
 
@@ -1623,10 +1638,11 @@ async function generateSpeech() {
   dlBtn.style.display = 'none';
 
   try {
+    const model = document.getElementById('tts-model').value;
     const r = await fetch('/api/tts/speech', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, voice }),
+      body: JSON.stringify({ text, voice, model }),
     });
     if (r.status === 401) { doLogout(); return; }
     if (!r.ok) {
