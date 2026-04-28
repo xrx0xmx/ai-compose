@@ -303,6 +303,11 @@ services:
     restart: unless-stopped
     profiles: ["matxa-cpu"]
 
+  catotron-cpu:
+    image: projecteaina/tts-api:latest
+    container_name: catotron-cpu
+    restart: unless-stopped
+
   matxa-adapter:
     build:
       context: .
@@ -311,6 +316,7 @@ services:
     environment:
       - PYTHONDONTWRITEBYTECODE=1
       - MATXA_BACKEND_URL=http://matxa-backend:8000
+      - CATOTRON_BACKEND_URL=http://catotron-cpu:8000
       - MATXA_DEFAULT_MODEL=${MATXA_DEFAULT_MODEL:-tts-1}
       - MATXA_DEFAULT_VOICE=${MATXA_DEFAULT_VOICE:-central-grau}
       - MATXA_REQUEST_TIMEOUT_SECONDS=${MATXA_REQUEST_TIMEOUT_SECONDS:-120}
