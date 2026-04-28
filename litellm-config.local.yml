@@ -4,6 +4,16 @@ model_list:
       model: ollama/qwen2.5:7b
       api_base: http://ollama:11434
 
+  - model_name: deepseek-v4-flash
+    litellm_params:
+      model: ollama/deepseek-r1:32b
+      api_base: http://ollama:11434
+
+  - model_name: deepseek-v4-pro
+    litellm_params:
+      model: ollama/deepseek-r1:32b
+      api_base: http://ollama:11434
+
 general_settings:
   master_key: "cambiaLAclave"
   database_url: "os.environ/DATABASE_URL"

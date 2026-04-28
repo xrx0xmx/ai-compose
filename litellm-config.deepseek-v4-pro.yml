@@ -1,9 +1,9 @@
 model_list:
   - model_name: deepseek-v4-pro
     litellm_params:
-      model: openai/deepseek-v4-pro
-      api_base: os.environ/DEEPSEEK_API_BASE
-      api_key: os.environ/DEEPSEEK_API_KEY
+      model: openai/casperhansen/deepseek-r1-distill-qwen-32b-awq
+      api_base: http://vllm-deepseek-v4:8000/v1
+      api_key: EMPTY
 
 general_settings:
   master_key: "cambiaLAclave"
