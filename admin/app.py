@@ -51,7 +51,9 @@ ALLOWED_CONTAINERS = [
 MODEL_INFO = {
     "qwen-fast":    {"label": "Qwen 2.5 7B",   "vram": "~13 GB (55%)", "container": "vllm-fast"},
     "qwen-quality": {"label": "Qwen 2.5 14B",  "vram": "~20 GB (85%)", "container": "vllm-quality"},
-    "deepseek":     {"label": "DeepSeek-R1 14B","vram": "~21 GB (95%)", "container": "vllm-deepseek"},
+    "deepseek-r1-local": {"label": "DeepSeek-R1 14B (Local)","vram": "~21 GB (95%)", "container": "vllm-deepseek"},
+    "deepseek-v4-flash": {"label": "DeepSeek-V4 Flash (API)","vram": "API remota", "container": None},
+    "deepseek-v4-pro":   {"label": "DeepSeek-V4 Pro (API)","vram": "API remota", "container": None},
     "qwen-max":     {"label": "Qwen 2.5 32B",  "vram": "~21 GB (95%)", "container": "vllm-qwen32b"},
 }
 
@@ -73,6 +75,7 @@ class LoginRequest(BaseModel):
 class TTSSpeechRequest(BaseModel):
     text: str
     voice: str
+    model: str = "tts-1"
 
 
 def verify_webui_credentials(email: str, password: str) -> Optional[dict]:
@@ -478,7 +481,7 @@ def build_ai_models_payload() -> Dict[str, Any]:
     runtime_containers = status_payload.get("containers") or {}
     running_ids = set(status_payload.get("running_models") or [])
     active_model = status_payload.get("active_model")
-    active_mode = status_payload.get("active_mode")
+    active_mode = status_payload.get("active_mode") or "llm"
 
     models: List[Dict[str, Any]] = []
     for model in models_payload.get("models", []):
@@ -538,7 +541,7 @@ def me(user: dict = Depends(get_current_user)):
 @app.get("/api/status")
 def api_status(user: dict = Depends(get_current_user)):
     try:
-        return switcher_get("/mode")
+        return switcher_get("/status")
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
 
@@ -614,12 +617,17 @@ class ModeSwitchBody(BaseModel):
 
 @app.post("/api/mode/switch")
 def api_mode_switch(body: ModeSwitchBody, user: dict = Depends(get_current_user)):
-    payload = {"mode": body.mode, "wait_for_ready": body.wait_for_ready}
-    if body.model:
-        payload["model"] = body.model
-    if body.ttl_minutes is not None:
-        payload["ttl_minutes"] = body.ttl_minutes
+    mode = body.mode.strip().lower()
     try:
+        if mode == "llm":
+            if not body.model:
+                raise HTTPException(status_code=400, detail="Debes indicar un modelo para modo llm")
+            return switcher_post("/switch", {"model": body.model}, timeout=300)
+        payload = {"mode": mode, "wait_for_ready": body.wait_for_ready}
+        if body.model:
+            payload["model"] = body.model
+        if body.ttl_minutes is not None:
+            payload["ttl_minutes"] = body.ttl_minutes
         return switcher_post("/mode/switch", payload, timeout=300)
     except requests.HTTPError as e:
         raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
@@ -678,10 +686,20 @@ def tts_voices(user: dict = Depends(get_current_user)) -> dict:
         raise HTTPException(status_code=503, detail=f"Matxa adapter unavailable: {exc}")
 
 
+@app.get("/api/tts/models")
+def tts_models(user: dict = Depends(get_current_user)) -> dict:
+    try:
+        r = requests.get(f"{MATXA_ADAPTER_URL}/v1/models", timeout=5)
+        r.raise_for_status()
+        return r.json()
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=503, detail=f"Matxa adapter unavailable: {exc}")
+
+
 @app.post("/api/tts/speech")
 def tts_speech(req: TTSSpeechRequest, user: dict = Depends(get_current_user)) -> Response:
     payload = {
-        "model": "tts-1",
+        "model": req.model,
         "input": req.text,
         "voice": req.voice,
         "response_format": "wav",
@@ -1082,6 +1100,12 @@ HTML = r"""<!DOCTYPE html>
 
         <div style="max-width:640px; display:flex; flex-direction:column; gap:16px; margin-top:8px;">
           <div class="form-group" style="margin:0">
+            <label for="tts-model">Motor</label>
+            <select id="tts-model" style="width:100%; background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--text); padding:10px 12px; font-size:.95rem;">
+              <option value="tts-1">Matxa TTS</option>
+            </select>
+          </div>
+          <div class="form-group" style="margin:0">
             <label for="tts-voice">Veu</label>
             <select id="tts-voice" style="width:100%; background:var(--bg); border:1px solid var(--border); border-radius:6px; color:var(--text); padding:10px 12px; font-size:.95rem;">
               <option value="central-grau">Grau (Central)</option>
@@ -1118,7 +1142,9 @@ HTML = r"""<!DOCTYPE html>
 const MODEL_INFO = {
   'qwen-fast':    {label:'Qwen 2.5 7B',     vram:'~13 GB (55%)'},
   'qwen-quality': {label:'Qwen 2.5 14B',    vram:'~20 GB (85%)'},
-  'deepseek':     {label:'DeepSeek-R1 14B', vram:'~21 GB (95%)'},
+  'deepseek-r1-local': {label:'DeepSeek-R1 14B (Local)', vram:'~21 GB (95%)'},
+  'deepseek-v4-flash': {label:'DeepSeek-V4 Flash (API)', vram:'API remota'},
+  'deepseek-v4-pro':   {label:'DeepSeek-V4 Pro (API)', vram:'API remota'},
   'qwen-max':     {label:'Qwen 2.5 32B',    vram:'~21 GB (95%)'},
 };
 
@@ -1582,16 +1608,25 @@ function showApp(name) {
 }
 
 async function loadTTSVoices() {
-  const sel = document.getElementById('tts-voice');
-  if (!sel || sel.dataset.loaded) return;
+  const voiceSel = document.getElementById('tts-voice');
+  const modelSel = document.getElementById('tts-model');
+  if (!voiceSel || voiceSel.dataset.loaded) return;
   try {
-    const data = await apiFetch('/api/tts/voices');
-    sel.innerHTML = data.voices.map(v =>
+    const [voiceData, modelData] = await Promise.all([
+      apiFetch('/api/tts/voices'),
+      apiFetch('/api/tts/models'),
+    ]);
+    voiceSel.innerHTML = voiceData.voices.map(v =>
       `<option value="${v.id}">${v.name}</option>`
     ).join('');
-    sel.dataset.loaded = '1';
+    if (modelData && modelData.data && modelData.data.length > 0) {
+      modelSel.innerHTML = modelData.data.map(m =>
+        `<option value="${m.id}">${m.label || m.id}</option>`
+      ).join('');
+    }
+    voiceSel.dataset.loaded = '1';
   } catch (_) {
-    // keep default option
+    // keep default options
   }
 }
 
@@ -1612,10 +1647,11 @@ async function generateSpeech() {
   dlBtn.style.display = 'none';
 
   try {
+    const model = document.getElementById('tts-model').value;
     const r = await fetch('/api/tts/speech', {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, voice }),
+      body: JSON.stringify({ text, voice, model }),
     });
     if (r.status === 401) { doLogout(); return; }
     if (!r.ok) {
@@ -1767,6 +1803,9 @@ function readableModelName(modelId) {
 }
 
 function readableModelMeta(model) {
+  if (model.label && model.label !== model.id) {
+    return model.label;
+  }
   const info = MODEL_INFO[model.id] || {};
   const parts = [];
   if (info.vram) parts.push(info.vram);

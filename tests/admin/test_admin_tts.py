@@ -108,3 +108,62 @@ def test_tts_speech_passes_adapter_error(monkeypatch):
 
     assert r.status_code == 400
     assert "Unknown voice" in r.json()["detail"]
+
+
+def test_tts_models_proxies_adapter(monkeypatch):
+    module = load_module(monkeypatch)
+    client = TestClient(module.app)
+    token = make_token(module)
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "object": "list",
+        "data": [
+            {"id": "tts-1", "object": "model", "owned_by": "matxa-adapter", "label": "Matxa TTS"},
+            {"id": "tts-catotron", "object": "model", "owned_by": "matxa-adapter", "label": "Catotron"},
+        ],
+    }
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("requests.get", return_value=mock_resp):
+        r = client.get("/api/tts/models", headers={"Authorization": f"Bearer {token}"})
+
+    assert r.status_code == 200
+    ids = [m["id"] for m in r.json()["data"]]
+    assert "tts-1" in ids
+    assert "tts-catotron" in ids
+
+
+def test_tts_models_requires_auth(monkeypatch):
+    module = load_module(monkeypatch)
+    client = TestClient(module.app)
+
+    r = client.get("/api/tts/models")
+    assert r.status_code == 401
+
+
+def test_tts_speech_passes_model_to_adapter(monkeypatch):
+    module = load_module(monkeypatch)
+    client = TestClient(module.app)
+    token = make_token(module)
+
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["json"] = json
+        mock = MagicMock()
+        mock.status_code = 200
+        mock.content = b"RIFF....fake"
+        mock.headers = {"Content-Type": "audio/wav"}
+        return mock
+
+    with patch("requests.post", side_effect=fake_post):
+        r = client.post(
+            "/api/tts/speech",
+            json={"text": "Hola", "voice": "central-grau", "model": "tts-catotron"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert r.status_code == 200
+    assert captured["json"]["model"] == "tts-catotron"
