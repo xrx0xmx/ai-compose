@@ -52,8 +52,6 @@ MODEL_INFO = {
     "qwen-fast":    {"label": "Qwen 2.5 7B",   "vram": "~13 GB (55%)", "container": "vllm-fast"},
     "qwen-quality": {"label": "Qwen 2.5 14B",  "vram": "~20 GB (85%)", "container": "vllm-quality"},
     "deepseek-r1-local": {"label": "DeepSeek-R1 14B (Local)","vram": "~21 GB (95%)", "container": "vllm-deepseek"},
-    "deepseek-v4-flash": {"label": "DeepSeek-V4 Flash (API)","vram": "API remota", "container": None},
-    "deepseek-v4-pro":   {"label": "DeepSeek-V4 Pro (API)","vram": "API remota", "container": None},
     "qwen-max":     {"label": "Qwen 2.5 32B",  "vram": "~21 GB (95%)", "container": "vllm-qwen32b"},
 }
 
@@ -1143,8 +1141,6 @@ const MODEL_INFO = {
   'qwen-fast':    {label:'Qwen 2.5 7B',     vram:'~13 GB (55%)'},
   'qwen-quality': {label:'Qwen 2.5 14B',    vram:'~20 GB (85%)'},
   'deepseek-r1-local': {label:'DeepSeek-R1 14B (Local)', vram:'~21 GB (95%)'},
-  'deepseek-v4-flash': {label:'DeepSeek-V4 Flash (API)', vram:'API remota'},
-  'deepseek-v4-pro':   {label:'DeepSeek-V4 Pro (API)', vram:'API remota'},
   'qwen-max':     {label:'Qwen 2.5 32B',    vram:'~21 GB (95%)'},
 };
 

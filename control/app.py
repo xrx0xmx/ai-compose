@@ -61,24 +61,6 @@ MODELS: Dict[str, Dict[str, Any]] = {
     "litellm_model": "qwen-max",
     "requires_api_key": False,
   },
-  "deepseek-v4-flash": {
-    "label": "DeepSeek R1 32B (Flash)",
-    "provider": "local-vllm",
-    "kind": "local_vllm",
-    "container": "vllm-deepseek-v4",
-    "template": "deepseek-v4-flash.yml",
-    "litellm_model": "deepseek-v4-flash",
-    "requires_api_key": False,
-  },
-  "deepseek-v4-pro": {
-    "label": "DeepSeek R1 32B (Pro)",
-    "provider": "local-vllm",
-    "kind": "local_vllm",
-    "container": "vllm-deepseek-v4",
-    "template": "deepseek-v4-pro.yml",
-    "litellm_model": "deepseek-v4-pro",
-    "requires_api_key": False,
-  },
 }
 
 LITELLM_CONTAINER = "litellm"
@@ -215,6 +197,14 @@ def local_model_ids() -> List[str]:
   ]
 
 
+def local_models_by_container() -> Dict[str, List[str]]:
+  grouped: Dict[str, List[str]] = {}
+  for model_id in local_model_ids():
+    container_name = str(MODELS[model_id]["container"])
+    grouped.setdefault(container_name, []).append(model_id)
+  return grouped
+
+
 def ensure_active_config(model: str) -> None:
   os.makedirs(CONFIG_DIR, exist_ok=True)
   template_name = MODELS[model]["template"]
@@ -344,23 +334,34 @@ def running_models_from_status(status: Dict[str, Any]) -> List[str]:
 def status_payload() -> Dict[str, Any]:
   running_models: List[str] = []
   containers: Dict[str, Any] = {}
+  active = active_model()
 
-  for model_id in local_model_ids():
-    meta = MODELS[model_id]
+  for container_name, model_ids in local_models_by_container().items():
     try:
-      snapshot = state_snapshot(meta["container"])
+      snapshot = state_snapshot(container_name)
     except RuntimeError as exc:
-      containers[model_id] = {
+      error_snapshot = {
         "exists": False,
         "status": None,
         "health": None,
         "error": str(exc),
       }
+      for model_id in model_ids:
+        containers[model_id] = error_snapshot
       continue
 
-    containers[model_id] = snapshot
-    if snapshot.get("status") == "running":
-      running_models.append(model_id)
+    for model_id in model_ids:
+      containers[model_id] = snapshot
+
+    if snapshot.get("status") != "running":
+      continue
+
+    if len(model_ids) == 1:
+      running_models.append(model_ids[0])
+      continue
+
+    if active in model_ids:
+      running_models.append(active)
 
   litellm_info: Dict[str, Any]
   try:
@@ -382,7 +383,7 @@ def status_payload() -> Dict[str, Any]:
     },
     "active_mode": "llm",
     "running_models": running_models,
-    "active_model": active_model(),
+    "active_model": active,
     "active_config": ACTIVE_CONFIG if os.path.exists(ACTIVE_CONFIG) else None,
     "containers": containers,
     "litellm": litellm_info,
