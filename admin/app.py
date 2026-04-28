@@ -73,6 +73,7 @@ class LoginRequest(BaseModel):
 class TTSSpeechRequest(BaseModel):
     text: str
     voice: str
+    model: str = "tts-1"
 
 
 def verify_webui_credentials(email: str, password: str) -> Optional[dict]:
@@ -678,10 +679,20 @@ def tts_voices(user: dict = Depends(get_current_user)) -> dict:
         raise HTTPException(status_code=503, detail=f"Matxa adapter unavailable: {exc}")
 
 
+@app.get("/api/tts/models")
+def tts_models(user: dict = Depends(get_current_user)) -> dict:
+    try:
+        r = requests.get(f"{MATXA_ADAPTER_URL}/v1/models", timeout=5)
+        r.raise_for_status()
+        return r.json()
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=503, detail=f"Matxa adapter unavailable: {exc}")
+
+
 @app.post("/api/tts/speech")
 def tts_speech(req: TTSSpeechRequest, user: dict = Depends(get_current_user)) -> Response:
     payload = {
-        "model": "tts-1",
+        "model": req.model,
         "input": req.text,
         "voice": req.voice,
         "response_format": "wav",
