@@ -1,7 +1,7 @@
 import os
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -23,6 +23,8 @@ LITELLM_VERIFY_TIMEOUT_SECONDS = int(os.getenv("MODEL_SWITCHER_LITELLM_VERIFY_TI
 
 ACTIVE_CONFIG = os.path.join(CONFIG_DIR, "active.yml")
 ACTIVE_MODEL_FILE = os.path.join(CONFIG_DIR, "active.model")
+ACTIVE_MODE_FILE = os.path.join(CONFIG_DIR, "active.mode")
+ACTIVE_COMFY_LEASE_FILE = os.path.join(CONFIG_DIR, "active.mode.lease_until")
 
 MODELS: Dict[str, Dict[str, Any]] = {
   "qwen-fast": {
@@ -73,9 +75,11 @@ MODELS: Dict[str, Dict[str, Any]] = {
 }
 
 LITELLM_CONTAINER = "litellm"
+COMFYUI_CONTAINER = "comfyui"
 MODEL_ALIASES: Dict[str, str] = {
   "deepseek": "deepseek-r1-local",
 }
+DEFAULT_COMFY_TTL_MINUTES = int(os.getenv("COMFY_DEFAULT_TTL_MINUTES", "45"))
 
 app = FastAPI(title="AI Model Switcher", version="2.1.0")
 
@@ -92,6 +96,8 @@ class SwitchRequest(BaseModel):
 class ModeSwitchRequest(BaseModel):
   mode: str
   model: Optional[str] = None
+  ttl_minutes: Optional[int] = None
+  wait_for_ready: bool = False
 
 
 def utc_now() -> str:
@@ -171,6 +177,14 @@ def read_optional_text(path: str) -> Optional[str]:
     return None
 
 
+def read_optional_text_stripped(path: str) -> Optional[str]:
+  value = read_optional_text(path)
+  if value is None:
+    return None
+  stripped = value.strip()
+  return stripped or None
+
+
 def write_text(path: str, content: str) -> None:
   with open(path, "w", encoding="utf-8") as handle:
     handle.write(content)
@@ -184,13 +198,72 @@ def remove_file(path: str) -> None:
 
 
 def active_model() -> Optional[str]:
-  value = read_optional_text(ACTIVE_MODEL_FILE)
+  value = read_optional_text_stripped(ACTIVE_MODEL_FILE)
   if value is None:
     return None
-  current = value.strip()
+  current = value
   if current in MODEL_ALIASES:
     current = MODEL_ALIASES[current]
   return current if current in MODELS else None
+
+
+def active_mode() -> str:
+  mode = read_optional_text_stripped(ACTIVE_MODE_FILE)
+  if mode == "comfy":
+    return "comfy"
+  return "llm"
+
+
+def parse_utc_datetime(value: Optional[str]) -> Optional[datetime]:
+  if not value:
+    return None
+  try:
+    parsed = datetime.fromisoformat(value.strip())
+  except ValueError:
+    return None
+  if parsed.tzinfo is None:
+    parsed = parsed.replace(tzinfo=timezone.utc)
+  return parsed.astimezone(timezone.utc)
+
+
+def comfy_lease_payload() -> Optional[Dict[str, Any]]:
+  expires_at = parse_utc_datetime(read_optional_text_stripped(ACTIVE_COMFY_LEASE_FILE))
+  if expires_at is None:
+    return None
+
+  now = datetime.now(timezone.utc)
+  remaining_seconds = max(int((expires_at - now).total_seconds()), 0)
+  return {
+    "expires_at": expires_at.isoformat(),
+    "remaining_seconds": remaining_seconds,
+    "expired": remaining_seconds <= 0,
+  }
+
+
+def write_mode_files(mode: str, *, ttl_minutes: Optional[int] = None) -> None:
+  os.makedirs(CONFIG_DIR, exist_ok=True)
+
+  normalized_mode = "comfy" if mode == "comfy" else "llm"
+  write_text(ACTIVE_MODE_FILE, normalized_mode)
+
+  if normalized_mode != "comfy":
+    remove_file(ACTIVE_COMFY_LEASE_FILE)
+    return
+
+  ttl = ttl_minutes if ttl_minutes and ttl_minutes > 0 else DEFAULT_COMFY_TTL_MINUTES
+  lease_until = datetime.now(timezone.utc) + timedelta(minutes=ttl)
+  write_text(ACTIVE_COMFY_LEASE_FILE, lease_until.isoformat())
+
+
+def restore_mode_files(previous_mode: Optional[str], previous_lease: Optional[str]) -> None:
+  normalized_mode = "comfy" if (previous_mode or "").strip().lower() == "comfy" else "llm"
+  os.makedirs(CONFIG_DIR, exist_ok=True)
+  write_text(ACTIVE_MODE_FILE, normalized_mode)
+
+  if normalized_mode == "comfy" and previous_lease and previous_lease.strip():
+    write_text(ACTIVE_COMFY_LEASE_FILE, previous_lease.strip())
+  else:
+    remove_file(ACTIVE_COMFY_LEASE_FILE)
 
 
 def model_kind(model: Optional[str]) -> Optional[str]:
@@ -212,6 +285,11 @@ def local_models_by_container() -> Dict[str, List[str]]:
     container_name = str(MODELS[model_id]["container"])
     grouped.setdefault(container_name, []).append(model_id)
   return grouped
+
+
+def stop_all_local_models() -> None:
+  for local_model_id in local_model_ids():
+    container_stop(str(MODELS[local_model_id]["container"]))
 
 
 def ensure_active_config(model: str) -> None:
@@ -344,6 +422,7 @@ def status_payload() -> Dict[str, Any]:
   running_models: List[str] = []
   containers: Dict[str, Any] = {}
   active = active_model()
+  mode = active_mode()
 
   for container_name, model_ids in local_models_by_container().items():
     try:
@@ -383,19 +462,35 @@ def status_payload() -> Dict[str, Any]:
       "error": str(exc),
     }
 
+  try:
+    comfyui_info = state_snapshot(COMFYUI_CONTAINER)
+  except RuntimeError as exc:
+    comfyui_info = {
+      "exists": False,
+      "status": None,
+      "health": None,
+      "error": str(exc),
+    }
+
   runtime = runtime_state()
+  active_litellm_model = None
+  if mode == "llm" and active in MODELS:
+    active_litellm_model = MODELS[active]["litellm_model"]
 
   return {
     "mode": {
-      "active": "llm",
-      "lease": None,
+      "active": mode,
+      "lease": comfy_lease_payload() if mode == "comfy" else None,
     },
-    "active_mode": "llm",
+    "active_mode": mode,
     "running_models": running_models,
     "active_model": active,
+    "active_litellm_model": active_litellm_model,
     "active_config": ACTIVE_CONFIG if os.path.exists(ACTIVE_CONFIG) else None,
     "containers": containers,
     "litellm": litellm_info,
+    "comfyui": comfyui_info,
+    "switch": {"ready": not SWITCH_LOCK.locked()},
     "switch_in_progress": SWITCH_LOCK.locked(),
     "last_error": runtime["last_error"],
     "last_switch_at": runtime["last_switch_at"],
@@ -444,6 +539,16 @@ def health() -> Dict[str, str]:
 @app.get("/healthz/ready")
 def ready() -> Dict[str, str]:
   payload = status_payload()
+  mode = str(payload.get("active_mode") or "llm")
+
+  if mode == "comfy":
+    comfyui = payload.get("comfyui") or {}
+    if comfyui.get("status") != "running":
+      raise HTTPException(status_code=503, detail="comfyui is not running")
+    if comfyui.get("health") == "unhealthy":
+      raise HTTPException(status_code=503, detail="comfyui is unhealthy")
+    return {"status": "ready", "active_mode": "comfy"}
+
   running = running_models_from_status(payload)
   active = payload.get("active_model")
   active_kind = model_kind(active)
@@ -456,7 +561,7 @@ def ready() -> Dict[str, str]:
     if running[0] != active:
       raise HTTPException(status_code=503, detail="active model does not match running model")
 
-  return {"status": "ready", "active_model": active}
+  return {"status": "ready", "active_mode": "llm", "active_model": active}
 
 
 @app.get("/models", dependencies=[Depends(require_token)])
@@ -480,12 +585,13 @@ def models() -> Dict[str, Any]:
 
 @app.get("/mode", dependencies=[Depends(require_token)])
 def mode_status() -> Dict[str, Any]:
+  mode = active_mode()
   return {
     "mode": {
-      "active": "llm",
-      "lease": None,
+      "active": mode,
+      "lease": comfy_lease_payload() if mode == "comfy" else None,
     },
-    "active_mode": "llm",
+    "active_mode": mode,
     "active_model": active_model(),
   }
 
@@ -510,6 +616,9 @@ def switch(req: SwitchRequest) -> Dict[str, Any]:
 
   previous_config = read_optional_text(ACTIVE_CONFIG)
   previous_model_value = read_optional_text(ACTIVE_MODEL_FILE)
+  previous_mode_value = read_optional_text(ACTIVE_MODE_FILE)
+  previous_lease_value = read_optional_text(ACTIVE_COMFY_LEASE_FILE)
+  previous_mode = active_mode()
 
   before = status_payload()
   running_before = running_models_from_status(before)
@@ -551,10 +660,12 @@ def switch(req: SwitchRequest) -> Dict[str, Any]:
     disruptive_started = True
     add_step(steps, "stop_litellm", True, "litellm stopped")
 
-    for local_model_id in local_model_ids():
-      container_name = MODELS[local_model_id]["container"]
-      container_stop(container_name)
+    stop_all_local_models()
     add_step(steps, "stop_models", True, "all vllm containers stopped")
+
+    if previous_mode == "comfy":
+      container_stop(COMFYUI_CONTAINER)
+      add_step(steps, "stop_comfyui", True, "comfyui stopped")
 
     if target_kind == "local_vllm":
       container_start(target_container)
@@ -572,6 +683,9 @@ def switch(req: SwitchRequest) -> Dict[str, Any]:
     litellm_model_name = MODELS[model]["litellm_model"]
     wait_litellm_model(litellm_model_name, LITELLM_VERIFY_TIMEOUT_SECONDS)
     add_step(steps, "verify_litellm", True, f"litellm exposes model '{litellm_model_name}'")
+
+    write_mode_files("llm")
+    add_step(steps, "activate_mode", True, "switcher mode set to llm")
 
     set_runtime_state(clear_error=True)
     return switch_response(
@@ -592,13 +706,38 @@ def switch(req: SwitchRequest) -> Dict[str, Any]:
 
     final_status = "failed"
 
-    if disruptive_started and from_model and from_model in MODELS and from_model != model:
+    if disruptive_started and previous_mode == "comfy":
       try:
         restore_active_files(previous_config, previous_model_value)
         add_step(steps, "rollback_restore_config", True, "active config restored")
 
-        for local_model_id in local_model_ids():
-          container_stop(MODELS[local_model_id]["container"])
+        stop_all_local_models()
+        add_step(steps, "rollback_stop_models", True, "all vllm containers stopped")
+
+        container_stop(LITELLM_CONTAINER)
+        add_step(steps, "rollback_stop_litellm", True, "litellm stopped")
+
+        restore_mode_files(previous_mode_value, previous_lease_value)
+        add_step(steps, "rollback_restore_mode", True, "comfy mode restored")
+
+        if container_json(COMFYUI_CONTAINER) is None:
+          raise RuntimeError(f"rollback container missing: {COMFYUI_CONTAINER}")
+
+        container_start(COMFYUI_CONTAINER)
+        wait_container_ready(COMFYUI_CONTAINER, HEALTH_TIMEOUT_SECONDS)
+        add_step(steps, "rollback_start_comfyui", True, "comfyui restored")
+
+        final_status = "rolled_back"
+      except Exception as rollback_exc:
+        rollback_error = str(rollback_exc)
+        add_step(steps, "rollback_error", False, rollback_error)
+        error_detail = f"{error_detail}; rollback failed: {rollback_error}"
+    elif disruptive_started and from_model and from_model in MODELS and from_model != model:
+      try:
+        restore_active_files(previous_config, previous_model_value)
+        add_step(steps, "rollback_restore_config", True, "active config restored")
+
+        stop_all_local_models()
         add_step(steps, "rollback_stop_models", True, "all vllm containers stopped")
 
         if MODELS[from_model].get("kind") == "local_vllm":
@@ -614,6 +753,8 @@ def switch(req: SwitchRequest) -> Dict[str, Any]:
         rollback_litellm_model = MODELS[from_model]["litellm_model"]
         wait_litellm_model(rollback_litellm_model, LITELLM_VERIFY_TIMEOUT_SECONDS)
         add_step(steps, "rollback_litellm", True, "litellm restored")
+        restore_mode_files(previous_mode_value, previous_lease_value)
+        add_step(steps, "rollback_restore_mode", True, "switcher mode restored")
 
         final_status = "rolled_back"
       except Exception as rollback_exc:
@@ -631,6 +772,11 @@ def switch(req: SwitchRequest) -> Dict[str, Any]:
         add_step(steps, "restore_litellm", True, "litellm restarted")
       except Exception as litellm_exc:
         add_step(steps, "restore_litellm", False, str(litellm_exc))
+      try:
+        restore_mode_files(previous_mode_value, previous_lease_value)
+        add_step(steps, "restore_mode", True, "switcher mode restored")
+      except Exception as mode_restore_exc:
+        add_step(steps, "restore_mode", False, str(mode_restore_exc))
 
     set_runtime_state(last_error=error_detail)
     return switch_response(
@@ -648,23 +794,158 @@ def switch(req: SwitchRequest) -> Dict[str, Any]:
 
 @app.post("/stop", dependencies=[Depends(require_token)])
 def stop() -> Dict[str, Any]:
-  for local_model_id in local_model_ids():
-    container_stop(MODELS[local_model_id]["container"])
+  stop_all_local_models()
   return status_payload()
+
+
+def switch_to_comfy(req: ModeSwitchRequest) -> Dict[str, Any]:
+  if not SWITCH_LOCK.acquire(blocking=False):
+    raise HTTPException(status_code=409, detail="switch_in_progress")
+
+  started = time.monotonic()
+  steps: List[Dict[str, Any]] = []
+  ttl_minutes = req.ttl_minutes if req.ttl_minutes and req.ttl_minutes > 0 else DEFAULT_COMFY_TTL_MINUTES
+
+  previous_config = read_optional_text(ACTIVE_CONFIG)
+  previous_model_value = read_optional_text(ACTIVE_MODEL_FILE)
+  previous_mode_value = read_optional_text(ACTIVE_MODE_FILE)
+  previous_lease_value = read_optional_text(ACTIVE_COMFY_LEASE_FILE)
+  previous_mode = active_mode()
+
+  before = status_payload()
+  disruptive_started = False
+
+  try:
+    if container_json(COMFYUI_CONTAINER) is None:
+      raise HTTPException(
+        status_code=412,
+        detail=(
+          f"target container is not created: {COMFYUI_CONTAINER}. "
+          "Run make up first."
+        ),
+      )
+    add_step(steps, "preflight", True, f"target container exists: {COMFYUI_CONTAINER}")
+
+    comfy_snapshot = before.get("comfyui") or {}
+    if previous_mode == "comfy" and comfy_snapshot.get("status") == "running":
+      write_mode_files("comfy", ttl_minutes=ttl_minutes)
+      add_step(steps, "refresh_lease", True, f"comfy lease extended to {ttl_minutes} minutes")
+      set_runtime_state(clear_error=True)
+      return switch_response(
+        status="success",
+        from_model=before.get("active_model"),
+        to_model="comfy",
+        steps=steps,
+        started=started,
+        error=None,
+      )
+
+    container_stop(LITELLM_CONTAINER)
+    disruptive_started = True
+    add_step(steps, "stop_litellm", True, "litellm stopped")
+
+    stop_all_local_models()
+    add_step(steps, "stop_models", True, "all vllm containers stopped")
+
+    container_start(COMFYUI_CONTAINER)
+    add_step(steps, "start_comfyui", True, "comfyui started")
+
+    if req.wait_for_ready:
+      wait_container_ready(COMFYUI_CONTAINER, HEALTH_TIMEOUT_SECONDS)
+      add_step(steps, "wait_comfyui", True, "comfyui is ready")
+
+    write_mode_files("comfy", ttl_minutes=ttl_minutes)
+    add_step(steps, "activate_mode", True, f"switcher mode set to comfy ({ttl_minutes} min)")
+
+    set_runtime_state(clear_error=True)
+    return switch_response(
+      status="success",
+      from_model=before.get("active_model"),
+      to_model="comfy",
+      steps=steps,
+      started=started,
+      error=None,
+    )
+  except HTTPException:
+    raise
+  except Exception as exc:
+    error_detail = str(exc)
+    add_step(steps, "switch_error", False, error_detail)
+
+    if disruptive_started:
+      try:
+        restore_active_files(previous_config, previous_model_value)
+        add_step(steps, "rollback_restore_config", True, "active config restored")
+      except Exception as restore_exc:
+        add_step(steps, "rollback_restore_config", False, str(restore_exc))
+
+      try:
+        container_stop(COMFYUI_CONTAINER)
+        add_step(steps, "rollback_stop_comfyui", True, "comfyui stopped")
+      except Exception as comfy_stop_exc:
+        add_step(steps, "rollback_stop_comfyui", False, str(comfy_stop_exc))
+
+      try:
+        restore_mode_files(previous_mode_value, previous_lease_value)
+        add_step(steps, "rollback_restore_mode", True, "switcher mode restored")
+      except Exception as mode_restore_exc:
+        add_step(steps, "rollback_restore_mode", False, str(mode_restore_exc))
+
+      try:
+        if previous_mode == "comfy":
+          if container_json(COMFYUI_CONTAINER) is None:
+            raise RuntimeError(f"rollback container missing: {COMFYUI_CONTAINER}")
+          container_start(COMFYUI_CONTAINER)
+          wait_container_ready(COMFYUI_CONTAINER, HEALTH_TIMEOUT_SECONDS)
+          add_step(steps, "rollback_start_comfyui", True, "comfyui restored")
+        else:
+          current = active_model() or DEFAULT_MODEL
+          if current not in MODELS:
+            raise RuntimeError("no valid active model to restore")
+          target_container = str(MODELS[current]["container"])
+          if container_json(target_container) is None:
+            raise RuntimeError(f"rollback container missing: {target_container}")
+          container_start(target_container)
+          wait_container_ready(target_container, HEALTH_TIMEOUT_SECONDS)
+          add_step(steps, "rollback_start_previous", True, f"restored {current}")
+
+          container_start(LITELLM_CONTAINER)
+          wait_litellm_model(MODELS[current]["litellm_model"], LITELLM_VERIFY_TIMEOUT_SECONDS)
+          add_step(steps, "rollback_litellm", True, "litellm restored")
+      except Exception as rollback_exc:
+        rollback_error = str(rollback_exc)
+        add_step(steps, "rollback_error", False, rollback_error)
+        error_detail = f"{error_detail}; rollback failed: {rollback_error}"
+
+    set_runtime_state(last_error=error_detail)
+    return switch_response(
+      status="failed",
+      from_model=before.get("active_model"),
+      to_model="comfy",
+      steps=steps,
+      started=started,
+      error=error_detail,
+    )
+  finally:
+    SWITCH_LOCK.release()
 
 
 @app.post("/mode/switch", dependencies=[Depends(require_token)])
 def mode_switch(req: ModeSwitchRequest) -> Dict[str, Any]:
   mode = req.mode.strip().lower()
-  if mode != "llm":
-    raise HTTPException(status_code=400, detail="only llm mode is supported by this switcher")
-  if not req.model:
-    raise HTTPException(status_code=400, detail="model is required for llm mode")
-  return switch(SwitchRequest(model=req.model))
+  if mode == "llm":
+    if not req.model:
+      raise HTTPException(status_code=400, detail="model is required for llm mode")
+    return switch(SwitchRequest(model=req.model))
+  if mode == "comfy":
+    return switch_to_comfy(req)
+  raise HTTPException(status_code=400, detail="supported modes are llm and comfy")
 
 
 @app.post("/mode/release", dependencies=[Depends(require_token)])
 def mode_release() -> Dict[str, Any]:
+  if active_mode() != "comfy":
+    return status_payload()
   current = active_model() or DEFAULT_MODEL
   if current not in MODELS:
     raise HTTPException(status_code=400, detail="no valid active model to restore")
